@@ -1,0 +1,13 @@
+grafana:
+  adminPassword: "admin123"
+
+  service:
+    type: ClusterIP
+
+prometheus:
+  service:
+    type: ClusterIP
+
+alertmanager:
+  service:
+    type: ClusterIP
