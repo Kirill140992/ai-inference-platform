@@ -1,0 +1,21 @@
+replicaCount: 1
+
+image:
+  repository: qdrant/qdrant
+  tag: v1.7.3
+
+service:
+  type: ClusterIP
+  port: 6333
+
+persistence:
+  enabled: true
+  size: 5Gi
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "512Mi"
+  limits:
+    cpu: "500m"
+    memory: "1Gi"
