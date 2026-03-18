@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -32,13 +35,28 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+type CollectionInitRequest struct {
+	Name       string `json:"name"`
+	VectorSize int    `json:"vector_size"`
+	Distance   string `json:"distance"`
+}
+
+type QdrantCreateCollectionRequest struct {
+	Vectors QdrantVectorsConfig `json:"vectors"`
+}
+
+type QdrantVectorsConfig struct {
+	Size     int    `json:"size"`
+	Distance string `json:"distance"`
+}
+
 func main() {
 	port := getEnv("PORT", "8000")
 	qdrantURL := getEnv("QDRANT_URL", "http://qdrant:6333")
 
 	app := &App{
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout: 10 * time.Second,
 		},
 		qdrantURL: qdrantURL,
 	}
@@ -49,6 +67,7 @@ func main() {
 	mux.HandleFunc("/health", app.handleHealth)
 	mux.HandleFunc("/ready", app.handleReady)
 	mux.HandleFunc("/collections", app.handleCollections)
+	mux.HandleFunc("/collections/init", app.handleCollectionsInit)
 
 	server := &http.Server{
 		Addr:              ":" + port,
@@ -76,7 +95,7 @@ func (a *App) handleRoot(w http.ResponseWriter, r *http.Request) {
 		"service":     "api-go",
 		"status":      "ok",
 		"description": "AI inference platform API",
-		"endpoints":   "/health, /ready, /collections",
+		"endpoints":   "/health, /ready, /collections, /collections/init",
 	})
 }
 
@@ -88,7 +107,7 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
-	resp, body, err := a.fetchQdrant("/")
+	resp, body, err := a.doQdrantRequest(http.MethodGet, "/", nil)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, ReadyResponse{
 			Status:    "not ready",
@@ -118,7 +137,14 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleCollections(w http.ResponseWriter, r *http.Request) {
-	resp, body, err := a.fetchQdrant("/collections")
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{
+			Error: "method not allowed",
+		})
+		return
+	}
+
+	resp, body, err := a.doQdrantRequest(http.MethodGet, "/collections", nil)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, ErrorResponse{
 			Error: err.Error(),
@@ -131,10 +157,84 @@ func (a *App) handleCollections(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
-func (a *App) fetchQdrant(path string) (*http.Response, []byte, error) {
-	req, err := http.NewRequest(http.MethodGet, a.qdrantURL+path, nil)
+func (a *App) handleCollectionsInit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{
+			Error: "method not allowed",
+		})
+		return
+	}
+
+	var req CollectionInitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "invalid json body",
+		})
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "name is required",
+		})
+		return
+	}
+
+	if req.VectorSize == 0 {
+		req.VectorSize = 768
+	}
+
+	distance, err := normalizeDistance(req.Distance)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: err.Error(),
+		})
+		return
+	}
+
+	qdrantReq := QdrantCreateCollectionRequest{
+		Vectors: QdrantVectorsConfig{
+			Size:     req.VectorSize,
+			Distance: distance,
+		},
+	}
+
+	resp, body, err := a.doQdrantRequest(
+		http.MethodPut,
+		"/collections/"+url.PathEscape(req.Name),
+		qdrantReq,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{
+			Error: err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(body)
+}
+
+func (a *App) doQdrantRequest(method, path string, payload any) (*http.Response, []byte, error) {
+	var bodyReader io.Reader
+
+	if payload != nil {
+		requestBody, err := json.Marshal(payload)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to marshal qdrant request: %w", err)
+		}
+		bodyReader = bytes.NewReader(requestBody)
+	}
+
+	req, err := http.NewRequest(method, a.qdrantURL+path, bodyReader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create request to qdrant: %w", err)
+	}
+
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
 	resp, err := a.httpClient.Do(req)
@@ -156,6 +256,25 @@ func readResponseBody(resp *http.Response) ([]byte, error) {
 	}()
 
 	return io.ReadAll(resp.Body)
+}
+
+func normalizeDistance(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "Cosine", nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "cosine":
+		return "Cosine", nil
+	case "dot":
+		return "Dot", nil
+	case "euclid":
+		return "Euclid", nil
+	case "manhattan":
+		return "Manhattan", nil
+	default:
+		return "", fmt.Errorf("unsupported distance: %s", value)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
