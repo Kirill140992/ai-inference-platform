@@ -9,8 +9,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type App struct {
@@ -50,6 +55,46 @@ type QdrantVectorsConfig struct {
 	Distance string `json:"distance"`
 }
 
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+var (
+	apiRequestDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "api_request_duration_seconds",
+			Help:    "Duration of HTTP requests handled by api-go.",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"method", "path", "status"},
+	)
+
+	qdrantRequestDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "qdrant_request_duration_seconds",
+			Help:    "Duration of outbound requests from api-go to Qdrant.",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"method", "path", "status"},
+	)
+
+	qdrantRequestErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "qdrant_request_errors_total",
+			Help: "Total number of outbound request errors from api-go to Qdrant.",
+		},
+		[]string{"method", "path"},
+	)
+
+	apiReadinessFailuresTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "api_readiness_failures_total",
+			Help: "Total number of readiness failures in api-go.",
+		},
+	)
+)
+
 func main() {
 	port := getEnv("PORT", "8000")
 	qdrantURL := getEnv("QDRANT_URL", "http://qdrant:6333")
@@ -63,11 +108,12 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/", app.handleRoot)
-	mux.HandleFunc("/health", app.handleHealth)
-	mux.HandleFunc("/ready", app.handleReady)
-	mux.HandleFunc("/collections", app.handleCollections)
-	mux.HandleFunc("/collections/init", app.handleCollectionsInit)
+	mux.Handle("/", app.instrumentHandler("/", http.HandlerFunc(app.handleRoot)))
+	mux.Handle("/health", app.instrumentHandler("/health", http.HandlerFunc(app.handleHealth)))
+	mux.Handle("/ready", app.instrumentHandler("/ready", http.HandlerFunc(app.handleReady)))
+	mux.Handle("/collections", app.instrumentHandler("/collections", http.HandlerFunc(app.handleCollections)))
+	mux.Handle("/collections/init", app.instrumentHandler("/collections/init", http.HandlerFunc(app.handleCollectionsInit)))
+	mux.Handle("/metrics", promhttp.Handler())
 
 	server := &http.Server{
 		Addr:              ":" + port,
@@ -83,6 +129,30 @@ func main() {
 	}
 }
 
+func (a *App) instrumentHandler(path string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedAt := time.Now()
+
+		recorder := &statusRecorder{
+			ResponseWriter: w,
+			statusCode:     http.StatusOK,
+		}
+
+		next.ServeHTTP(recorder, r)
+
+		apiRequestDuration.WithLabelValues(
+			r.Method,
+			path,
+			strconv.Itoa(recorder.statusCode),
+		).Observe(time.Since(startedAt).Seconds())
+	})
+}
+
+func (sr *statusRecorder) WriteHeader(statusCode int) {
+	sr.statusCode = statusCode
+	sr.ResponseWriter.WriteHeader(statusCode)
+}
+
 func (a *App) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		writeJSON(w, http.StatusNotFound, ErrorResponse{
@@ -95,7 +165,7 @@ func (a *App) handleRoot(w http.ResponseWriter, r *http.Request) {
 		"service":     "api-go",
 		"status":      "ok",
 		"description": "AI inference platform API",
-		"endpoints":   "/health, /ready, /collections, /collections/init",
+		"endpoints":   "/health, /ready, /collections, /collections/init, /metrics",
 	})
 }
 
@@ -109,6 +179,7 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 	resp, body, err := a.doQdrantRequest(http.MethodGet, "/", nil)
 	if err != nil {
+		apiReadinessFailuresTotal.Inc()
 		writeJSON(w, http.StatusServiceUnavailable, ReadyResponse{
 			Status:    "not ready",
 			Service:   "api-go",
@@ -119,6 +190,7 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if resp.StatusCode >= 400 {
+		apiReadinessFailuresTotal.Inc()
 		writeJSON(w, http.StatusServiceUnavailable, ReadyResponse{
 			Status:    "not ready",
 			Service:   "api-go",
@@ -218,11 +290,14 @@ func (a *App) handleCollectionsInit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) doQdrantRequest(method, path string, payload any) (*http.Response, []byte, error) {
+	startedAt := time.Now()
+
 	var bodyReader io.Reader
 
 	if payload != nil {
 		requestBody, err := json.Marshal(payload)
 		if err != nil {
+			qdrantRequestErrorsTotal.WithLabelValues(method, path).Inc()
 			return nil, nil, fmt.Errorf("failed to marshal qdrant request: %w", err)
 		}
 		bodyReader = bytes.NewReader(requestBody)
@@ -230,6 +305,7 @@ func (a *App) doQdrantRequest(method, path string, payload any) (*http.Response,
 
 	req, err := http.NewRequest(method, a.qdrantURL+path, bodyReader)
 	if err != nil {
+		qdrantRequestErrorsTotal.WithLabelValues(method, path).Inc()
 		return nil, nil, fmt.Errorf("failed to create request to qdrant: %w", err)
 	}
 
@@ -239,13 +315,21 @@ func (a *App) doQdrantRequest(method, path string, payload any) (*http.Response,
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
+		qdrantRequestErrorsTotal.WithLabelValues(method, path).Inc()
 		return nil, nil, fmt.Errorf("failed to reach qdrant: %w", err)
 	}
 
 	body, err := readResponseBody(resp)
 	if err != nil {
+		qdrantRequestErrorsTotal.WithLabelValues(method, path).Inc()
 		return resp, nil, fmt.Errorf("failed to read qdrant response: %w", err)
 	}
+
+	qdrantRequestDuration.WithLabelValues(
+		method,
+		path,
+		strconv.Itoa(resp.StatusCode),
+	).Observe(time.Since(startedAt).Seconds())
 
 	return resp, body, nil
 }

@@ -15,17 +15,30 @@ spec:
       labels:
         app: api-go
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: api-go
-          image: ghcr.io/kirill140992/ai-inference-platform-api-go:v0.2.0
+          image: ghcr.io/kirill140992/ai-inference-platform-api-go:v0.3.0
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
+              name: http
           env:
             - name: PORT
               value: "8000"
             - name: QDRANT_URL
               value: "http://qdrant:6333"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           readinessProbe:
             httpGet:
               path: /ready
