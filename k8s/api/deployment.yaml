@@ -20,7 +20,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api-go
-          image: ghcr.io/kirill140992/ai-inference-platform-api-go:v0.3.0
+          image: ghcr.io/kirill140992/ai-inference-platform-api-go:v0.4.0
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
