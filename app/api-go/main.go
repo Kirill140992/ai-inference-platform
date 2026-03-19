@@ -91,7 +91,7 @@ type statusRecorder struct {
 	statusCode int
 }
 
-const chunkingVersion = "chunker_v1"
+const chunkingVersion = "chunker_v2"
 
 var (
 	apiRequestDuration = promauto.NewHistogramVec(
@@ -484,35 +484,232 @@ func (a *App) handleDocuments(w http.ResponseWriter, r *http.Request) {
 }
 
 func chunkText(content string, chunkSize int, chunkOverlap int) []string {
-	runes := []rune(strings.TrimSpace(content))
-	if len(runes) == 0 {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.TrimSpace(content)
+
+	if content == "" {
 		return []string{}
 	}
 
-	step := chunkSize - chunkOverlap
-	if step <= 0 {
-		step = chunkSize
+	sections := splitMarkdownSections(content)
+	var chunks []string
+
+	for _, section := range sections {
+		section = strings.TrimSpace(section)
+		if section == "" {
+			continue
+		}
+
+		if len([]rune(section)) <= chunkSize {
+			chunks = append(chunks, section)
+			continue
+		}
+
+		paragraphChunks := chunkSectionByParagraphs(section, chunkSize, chunkOverlap)
+		chunks = append(chunks, paragraphChunks...)
+	}
+
+	return chunks
+}
+
+func splitMarkdownSections(content string) []string {
+	lines := strings.Split(content, "\n")
+
+	var sections []string
+	var current []string
+
+	flush := func() {
+		section := strings.TrimSpace(strings.Join(current, "\n"))
+		if section != "" {
+			sections = append(sections, section)
+		}
+		current = nil
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		isHeading := strings.HasPrefix(trimmed, "#")
+
+		if isHeading && len(current) > 0 {
+			flush()
+		}
+
+		current = append(current, line)
+	}
+
+	if len(current) > 0 {
+		flush()
+	}
+
+	return sections
+}
+
+func chunkSectionByParagraphs(section string, chunkSize int, chunkOverlap int) []string {
+	paragraphs := splitParagraphs(section)
+
+	var chunks []string
+	var current string
+
+	for _, paragraph := range paragraphs {
+		paragraph = strings.TrimSpace(paragraph)
+		if paragraph == "" {
+			continue
+		}
+
+		if len([]rune(paragraph)) > chunkSize {
+			if strings.TrimSpace(current) != "" {
+				chunks = append(chunks, strings.TrimSpace(current))
+				current = ""
+			}
+
+			longChunks := splitLongTextByWords(paragraph, chunkSize, chunkOverlap)
+			chunks = append(chunks, longChunks...)
+			continue
+		}
+
+		if strings.TrimSpace(current) == "" {
+			current = paragraph
+			continue
+		}
+
+		candidate := current + "\n\n" + paragraph
+		if len([]rune(candidate)) <= chunkSize {
+			current = candidate
+		} else {
+			chunks = append(chunks, strings.TrimSpace(current))
+			current = paragraph
+		}
+	}
+
+	if strings.TrimSpace(current) != "" {
+		chunks = append(chunks, strings.TrimSpace(current))
+	}
+
+	return chunks
+}
+
+func splitParagraphs(section string) []string {
+	lines := strings.Split(section, "\n")
+
+	var paragraphs []string
+	var current []string
+
+	flush := func() {
+		paragraph := strings.TrimSpace(strings.Join(current, "\n"))
+		if paragraph != "" {
+			paragraphs = append(paragraphs, paragraph)
+		}
+		current = nil
+	}
+
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			if len(current) > 0 {
+				flush()
+			}
+			continue
+		}
+
+		current = append(current, line)
+	}
+
+	if len(current) > 0 {
+		flush()
+	}
+
+	return paragraphs
+}
+
+func splitLongTextByWords(text string, chunkSize int, chunkOverlap int) []string {
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{}
 	}
 
 	var chunks []string
+	start := 0
 
-	for start := 0; start < len(runes); start += step {
-		end := start + chunkSize
-		if end > len(runes) {
-			end = len(runes)
+	for start < len(words) {
+		currentWords := []string{}
+		currentLen := 0
+		end := start
+
+		for end < len(words) {
+			wordLen := len([]rune(words[end]))
+			addLen := wordLen
+			if len(currentWords) > 0 {
+				addLen += 1
+			}
+
+			if currentLen+addLen > chunkSize && len(currentWords) > 0 {
+				break
+			}
+
+			currentWords = append(currentWords, words[end])
+			currentLen += addLen
+			end++
+
+			if currentLen >= chunkSize {
+				break
+			}
 		}
 
-		chunk := strings.TrimSpace(string(runes[start:end]))
+		chunk := strings.TrimSpace(strings.Join(currentWords, " "))
 		if chunk != "" {
 			chunks = append(chunks, chunk)
 		}
 
-		if end == len(runes) {
+		if end >= len(words) {
 			break
+		}
+
+		overlapWords := calculateOverlapWords(currentWords, chunkOverlap)
+
+		if overlapWords >= len(currentWords) {
+			overlapWords = len(currentWords) - 1
+		}
+		if overlapWords < 0 {
+			overlapWords = 0
+		}
+
+		start = end - overlapWords
+		if start >= end {
+			start = end
 		}
 	}
 
 	return chunks
+}
+
+func calculateOverlapWords(words []string, overlapChars int) int {
+	if overlapChars <= 0 || len(words) <= 1 {
+		return 0
+	}
+
+	totalChars := 0
+	count := 0
+
+	for i := len(words) - 1; i >= 0; i-- {
+		wordLen := len([]rune(words[i]))
+		totalChars += wordLen
+		if count > 0 {
+			totalChars += 1
+		}
+		count++
+
+		if totalChars >= overlapChars {
+			break
+		}
+	}
+
+	if count >= len(words) {
+		count = len(words) - 1
+	}
+	if count < 0 {
+		count = 0
+	}
+
+	return count
 }
 
 func (a *App) doQdrantRequest(method, path string, payload interface{}) (*http.Response, []byte, error) {
