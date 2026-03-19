@@ -55,10 +55,43 @@ type QdrantVectorsConfig struct {
 	Distance string `json:"distance"`
 }
 
+type DocumentIngestRequest struct {
+	DocumentID   string `json:"document_id"`
+	Title        string `json:"title"`
+	Source       string `json:"source"`
+	Content      string `json:"content"`
+	ChunkSize    int    `json:"chunk_size"`
+	ChunkOverlap int    `json:"chunk_overlap"`
+	DryRun       bool   `json:"dry_run"`
+}
+
+type DocumentIngestResponse struct {
+	Status       string          `json:"status"`
+	DocumentID   string          `json:"document_id"`
+	Title        string          `json:"title"`
+	Source       string          `json:"source"`
+	ChunkSize    int             `json:"chunk_size"`
+	ChunkOverlap int             `json:"chunk_overlap"`
+	ChunkCount   int             `json:"chunk_count"`
+	ChunkingMode string          `json:"chunking_mode"`
+	ChunkingVer  string          `json:"chunking_version"`
+	DryRun       bool            `json:"dry_run"`
+	Chunks       []DocumentChunk `json:"chunks"`
+}
+
+type DocumentChunk struct {
+	ChunkID    string                 `json:"chunk_id"`
+	ChunkIndex int                    `json:"chunk_index"`
+	Text       string                 `json:"text"`
+	Metadata   map[string]interface{} `json:"metadata"`
+}
+
 type statusRecorder struct {
 	http.ResponseWriter
 	statusCode int
 }
+
+const chunkingVersion = "chunker_v1"
 
 var (
 	apiRequestDuration = promauto.NewHistogramVec(
@@ -93,6 +126,22 @@ var (
 			Help: "Total number of readiness failures in api-go.",
 		},
 	)
+
+	documentChunksProducedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "document_chunks_produced_total",
+			Help: "Total number of document chunks produced by the ingestion endpoint.",
+		},
+		[]string{"document_id"},
+	)
+
+	documentIngestRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "document_ingest_requests_total",
+			Help: "Total number of document ingestion requests.",
+		},
+		[]string{"mode"},
+	)
 )
 
 func main() {
@@ -113,6 +162,7 @@ func main() {
 	mux.Handle("/ready", app.instrumentHandler("/ready", http.HandlerFunc(app.handleReady)))
 	mux.Handle("/collections", app.instrumentHandler("/collections", http.HandlerFunc(app.handleCollections)))
 	mux.Handle("/collections/init", app.instrumentHandler("/collections/init", http.HandlerFunc(app.handleCollectionsInit)))
+	mux.Handle("/documents", app.instrumentHandler("/documents", http.HandlerFunc(app.handleDocuments)))
 	mux.Handle("/metrics", promhttp.Handler())
 
 	server := &http.Server{
@@ -165,7 +215,7 @@ func (a *App) handleRoot(w http.ResponseWriter, r *http.Request) {
 		"service":     "api-go",
 		"status":      "ok",
 		"description": "AI inference platform API",
-		"endpoints":   "/health, /ready, /collections, /collections/init, /metrics",
+		"endpoints":   "/health, /ready, /collections, /collections/init, /documents, /metrics",
 	})
 }
 
@@ -289,7 +339,183 @@ func (a *App) handleCollectionsInit(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
-func (a *App) doQdrantRequest(method, path string, payload any) (*http.Response, []byte, error) {
+func (a *App) handleDocuments(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{
+			Error: "method not allowed",
+		})
+		return
+	}
+
+	var req DocumentIngestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "invalid json body",
+		})
+		return
+	}
+
+	req.DocumentID = strings.TrimSpace(req.DocumentID)
+	req.Title = strings.TrimSpace(req.Title)
+	req.Source = strings.TrimSpace(req.Source)
+	req.Content = strings.TrimSpace(req.Content)
+
+	if req.DocumentID == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "document_id is required",
+		})
+		return
+	}
+
+	if req.Title == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "title is required",
+		})
+		return
+	}
+
+	if req.Source == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "source is required",
+		})
+		return
+	}
+
+	if req.Content == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "content is required",
+		})
+		return
+	}
+
+	if req.ChunkSize == 0 {
+		req.ChunkSize = 800
+	}
+
+	if req.ChunkOverlap == 0 {
+		req.ChunkOverlap = 120
+	}
+
+	if req.ChunkSize < 200 {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "chunk_size must be at least 200",
+		})
+		return
+	}
+
+	if req.ChunkOverlap < 0 {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "chunk_overlap must be 0 or greater",
+		})
+		return
+	}
+
+	if req.ChunkOverlap >= req.ChunkSize {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "chunk_overlap must be smaller than chunk_size",
+		})
+		return
+	}
+
+	chunkTexts := chunkText(req.Content, req.ChunkSize, req.ChunkOverlap)
+	chunks := make([]DocumentChunk, 0, len(chunkTexts))
+
+	for idx, text := range chunkTexts {
+		chunkID := fmt.Sprintf("%s::chunk-%03d", req.DocumentID, idx)
+
+		chunk := DocumentChunk{
+			ChunkID:    chunkID,
+			ChunkIndex: idx,
+			Text:       text,
+			Metadata: map[string]interface{}{
+				"document_id":      req.DocumentID,
+				"title":            req.Title,
+				"source":           req.Source,
+				"chunk_index":      idx,
+				"chunk_count":      len(chunkTexts),
+				"chunking_version": chunkingVersion,
+			},
+		}
+
+		chunks = append(chunks, chunk)
+	}
+
+	mode := "dry_run"
+	if !req.DryRun {
+		mode = "planned_ingest"
+	}
+	documentIngestRequestsTotal.WithLabelValues(mode).Inc()
+	documentChunksProducedTotal.WithLabelValues(req.DocumentID).Add(float64(len(chunks)))
+
+	if !req.DryRun {
+		writeJSON(w, http.StatusNotImplemented, map[string]interface{}{
+			"status":  "not_implemented",
+			"message": "real embeddings + qdrant upsert will be enabled after embeddings backend is connected",
+			"preview": DocumentIngestResponse{
+				Status:       "preview_ready",
+				DocumentID:   req.DocumentID,
+				Title:        req.Title,
+				Source:       req.Source,
+				ChunkSize:    req.ChunkSize,
+				ChunkOverlap: req.ChunkOverlap,
+				ChunkCount:   len(chunks),
+				ChunkingMode: "character_window",
+				ChunkingVer:  chunkingVersion,
+				DryRun:       true,
+				Chunks:       chunks,
+			},
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, DocumentIngestResponse{
+		Status:       "preview_ready",
+		DocumentID:   req.DocumentID,
+		Title:        req.Title,
+		Source:       req.Source,
+		ChunkSize:    req.ChunkSize,
+		ChunkOverlap: req.ChunkOverlap,
+		ChunkCount:   len(chunks),
+		ChunkingMode: "character_window",
+		ChunkingVer:  chunkingVersion,
+		DryRun:       true,
+		Chunks:       chunks,
+	})
+}
+
+func chunkText(content string, chunkSize int, chunkOverlap int) []string {
+	runes := []rune(strings.TrimSpace(content))
+	if len(runes) == 0 {
+		return []string{}
+	}
+
+	step := chunkSize - chunkOverlap
+	if step <= 0 {
+		step = chunkSize
+	}
+
+	var chunks []string
+
+	for start := 0; start < len(runes); start += step {
+		end := start + chunkSize
+		if end > len(runes) {
+			end = len(runes)
+		}
+
+		chunk := strings.TrimSpace(string(runes[start:end]))
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+
+		if end == len(runes) {
+			break
+		}
+	}
+
+	return chunks
+}
+
+func (a *App) doQdrantRequest(method, path string, payload interface{}) (*http.Response, []byte, error) {
 	startedAt := time.Now()
 
 	var bodyReader io.Reader
@@ -361,7 +587,7 @@ func normalizeDistance(value string) (string, error) {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
+func writeJSON(w http.ResponseWriter, statusCode int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
