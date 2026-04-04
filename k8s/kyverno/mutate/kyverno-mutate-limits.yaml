@@ -1,0 +1,29 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: add-default-resources
+spec:
+  background: false
+  rules:
+  - name: inject-default-limits
+    match:
+      resources:
+        kinds:
+        - Pod
+    exclude:
+      resources:
+        namespaces:
+        - kube-system
+        - kyverno
+    mutate:
+      patchStrategicMerge:
+        spec:
+          containers:
+          - (name): "?*"
+            +(resources):
+              +(requests):
+                +(cpu): "100m"
+                +(memory): "128Mi"
+              +(limits):
+                +(cpu): "500m"
+                +(memory): "512Mi"
