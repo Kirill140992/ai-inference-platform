@@ -16,6 +16,8 @@ spec:
         namespaces:
         - kube-system
         - kyverno
+        - monitoring
+        - trivy-system
     validate:
       message: "Running as root is forbidden. Containers must set securityContext.runAsNonRoot to true."
       pattern:

@@ -1,0 +1,11 @@
+serviceMonitor:
+  enabled: true
+  labels:
+    release: monitoring
+
+trivy:
+  metrics:
+    serviceMonitor:
+      enabled: true
+      labels:
+        release: monitoring
