@@ -19,6 +19,7 @@ COPY --from=builder /out/api-go /app/api-go
 
 EXPOSE 8000
 
+# checkov:skip=CKV_DOCKER_2: Scratch image does not have curl/wget for healthcheck
 USER 10001
 
 ENTRYPOINT ["/app/api-go"]

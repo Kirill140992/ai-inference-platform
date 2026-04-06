@@ -14,6 +14,9 @@ spec:
     metadata:
       labels:
         app: api-go
+      annotations:
+            checkov.io/skip1: "CKV_K8S_43=Using image tags for dev environment instead of sha256 digests"
+            checkov.io/skip2: "CKV2_K8S_6=NetworkPolicy is handled globally by Kyverno/Cilium"
     spec:
       automountServiceAccountToken: false
       securityContext:

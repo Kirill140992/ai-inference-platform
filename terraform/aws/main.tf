@@ -26,6 +26,8 @@ resource "aws_s3_bucket" "qdrant_backups" {
   # checkov:skip=CKV_AWS_300: Lifecycle config is not required
   # checkov:skip=CKV2_AWS_62: Event notifications are not required
   # checkov:skip=CKV2_AWS_6: Public access block is configured in a separate resource below
+  # checkov:skip=CKV_AWS_145: KMS encryption is too expensive for dev, using AES256
+  # checkov:skip=CKV2_AWS_61: Lifecycle configuration is not required for dev
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration"  "qdrant_backups_encryption" {
