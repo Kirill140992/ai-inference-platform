@@ -19,4 +19,6 @@ COPY --from=builder /out/api-go /app/api-go
 
 EXPOSE 8000
 
+USER 10001
+
 ENTRYPOINT ["/app/api-go"]

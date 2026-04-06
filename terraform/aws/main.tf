@@ -7,6 +7,8 @@ resource "aws_security_group" "allow_ssh" {
   description = "Allow SSH inbound traffic"
   vpc_id      = "vpc-123456"
 
+# checkov:skip=CKV2_AWS_5: Security group is provisioned for future EC2 instances
+
   ingress {
     description = "SSH from corporate VPN"
     from_port   = 22
@@ -18,6 +20,12 @@ resource "aws_security_group" "allow_ssh" {
 
 resource "aws_s3_bucket" "qdrant_backups" {
   bucket = "ai-platform-qdrant-backups-dev"
+
+  # checkov:skip=CKV_AWS_18: Access logging is overkill for dev environment
+  # checkov:skip=CKV_AWS_144: Cross region replication is not needed for dev
+  # checkov:skip=CKV_AWS_300: Lifecycle config is not required
+  # checkov:skip=CKV2_AWS_62: Event notifications are not required
+  # checkov:skip=CKV2_AWS_6: Public access block is configured in a separate resource below
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration"  "qdrant_backups_encryption" {
