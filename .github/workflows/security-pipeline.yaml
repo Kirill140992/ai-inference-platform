@@ -36,7 +36,7 @@ jobs:
       - name: Run Semgrep
         run: semgrep scan --config=p/default --sarif --output=semgrep.sarif
       - name: Upload SARIF to GitHub Security / DefectDojo
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: semgrep.sarif
@@ -75,7 +75,7 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-results.sarif
@@ -95,16 +95,15 @@ jobs:
         uses: bridgecrewio/checkov-action@master
         with:
           directory: .
-          framework: terraform, kubernetes
           output_format: cli, sarif
-          output_file: console, checkov-results.sarif
+          output_file_path: console,checkov-results.sarif
           soft_fail: true
       - name: Upload Checkov SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
-          sarif_file: checkov.sarif
-          
+          sarif_file: checkov-results.sarif
+
   # 6. DAST: OWASP ZAP
   dast-zap:
     name: DAST (OWASP ZAP)
@@ -118,7 +117,7 @@ jobs:
         run: |
           docker build -t api-go-staging ./app/api-go
           docker run -d -p 8080:8080 --name staging-api api-go-staging
-          sleep 5 # Ждем, пока API поднимется
+          sleep 5
           
       - name: OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.12.0
