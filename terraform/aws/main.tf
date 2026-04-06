@@ -24,7 +24,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration"  "qdrant_backups_e
     bucket = aws_s3_bucket.qdrant_backups.id
     rule {
         apply_server_side_encryption_by_default {
-            sse_algoritn = "AES256"
+            sse_algorithm = "AES256"
         }
     }
 }
