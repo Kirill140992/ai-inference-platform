@@ -80,7 +80,32 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
 
-  # 5. DAST: OWASP ZAP
+  # 5. IaC: Checkov
+  iac-checkov:
+    name: IaC Audit (Checkov)
+    runs-on: ubuntu-latest
+    needs: secret-scanning
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: terraform, kubernetes
+          output_format: cli, sarif
+          output_file: console, checkov-results.sarif
+          soft_fail: true
+      - name: Upload Checkov SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov.sarif
+          
+  # 6. DAST: OWASP ZAP
   dast-zap:
     name: DAST (OWASP ZAP)
     runs-on: ubuntu-latest
