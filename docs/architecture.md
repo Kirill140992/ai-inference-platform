@@ -20,6 +20,7 @@ flowchart LR
     subgraph External Infrastructure
     vLLM
     end
+```
 
 ## 2. Core Components
 
