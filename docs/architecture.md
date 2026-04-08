@@ -8,17 +8,17 @@ The infrastructure is divided into two primary execution environments: a lightwe
 
 ```mermaid
 flowchart LR
-    Client[  Client / UI  ] --> API[  api-go API  ]
-    API --> Qdrant[(  Qdrant Vector DB  )]
-    API <--> vLLM[  vLLM GPU Host  ]
+    Client(Client) --> API[api-go]
+    API --> Qdrant[(Qdrant DB)]
+    API <--> vLLM[vLLM Host]
 
-    subgraph k8s [  Kubernetes Cluster k3s  ]
-    API
-    Qdrant
+    subgraph K8s [Kubernetes Cluster]
+        API
+        Qdrant
     end
 
-    subgraph ext [  External Infrastructure  ]
-    vLLM
+    subgraph Ext [External GPU]
+        vLLM
     end
 ```
 
