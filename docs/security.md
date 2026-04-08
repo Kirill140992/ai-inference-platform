@@ -1,4 +1,4 @@
-# 🛡️ Security Architecture & DevSecOps
+#  Security Architecture & DevSecOps
 
 The platform's security posture is built on the **Defense in Depth** paradigm. Security is embedded across three critical layers: at the code integration phase (Shift-Left CI/CD), during infrastructure deployment (IaC & Kubernetes Hardening), and at the network perimeter (Edge Security).
 
