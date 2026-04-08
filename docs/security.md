@@ -9,11 +9,15 @@ The platform's security posture is built on the **Defense in Depth** paradigm. S
 The GitHub Actions pipeline is configured in strict **Enforcing Mode**. Any commit introducing vulnerabilities, secrets, or failing quality gates will automatically block the deployment process.
 
 * **Secret Management:** `Gitleaks` continuously scans for hardcoded tokens. All operational secrets are encrypted at rest within the repository using `SOPS` and `age` asymmetric cryptography, ensuring 100% GitOps compliance.
+
 * **SCA & Container Security:** `Trivy` analyzes the Docker base images (utilizing `scratch` to minimize the attack surface) and Go application dependencies (`go.mod`) for known CVEs.
+
 * **Continuous Code Quality (SAST):** **SonarQube Cloud** is integrated to enforce strict Quality Gates. Pull Requests are blocked if new Security Hotspots are introduced or if code coverage drops below established thresholds.
+
 * **Single Pane of Glass (Vulnerability Management):** All security scanners (including Checkov and Semgrep) are configured to generate standardized `.sarif` reports. These are automatically ingested into the **GitHub Advanced Security Dashboard**, creating a unified interface for vulnerability Triage and Technical Debt management.
 
 ![SonarQube Quality Gate](../architecture/sonarqube.png)
+
 ![GitHub Vulnerability Dashboard](../architecture/github-scanning.png)
 
 ---
@@ -23,7 +27,9 @@ The GitHub Actions pipeline is configured in strict **Enforcing Mode**. Any comm
 All infrastructure is defined as code (Terraform and Kubernetes manifests) and statically analyzed using `Checkov` prior to provisioning.
 
 * **Cloud Security (AWS):** S3 buckets for vector database backups enforce server-side encryption (AES-256) and versioning to mitigate ransomware risks. Strict `Public Access Blocks` are enabled. Network Security Groups restrict SSH access exclusively to the corporate VPN (Zero Trust).
+
 * **Security as Code (Risk Acceptance):** Scanner exceptions (False Positives or accepted business risks) are managed via explicit **code annotations** rather than UI buttons. This ensures every exception requires a documented business justification and is tracked via Git history.
+
 * **Kubernetes Security:**
   * Containers are strictly prohibited from running as `root` (`USER 10001` enforced in Dockerfiles).
   * Pods run with read-only filesystems and dropped capabilities where applicable.

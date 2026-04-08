@@ -9,10 +9,13 @@ The repository is structured into distinct architectural domains. Click on any s
 
 * 🏗️ **[Architecture & RAG Implementation](./docs/architecture.md)**
   Overview of the Go-based API, Qdrant vector database integration, and the AI inference pipeline logic.
+  
 * 🛡️ **[DevSecOps & Edge Security](./docs/security.md)**
   Comprehensive overview of the security posture, including CI/CD Shift-Left gates, Infrastructure hardening, and Cloudflare Edge protection.
+
 * ☁️ **[Infrastructure as Code](./docs/infrastructure.md)**
   How the AWS environment is provisioned using Terraform, and Kubernetes cluster configuration.
+
 * 📊 **[Observability & Monitoring](./docs/monitoring.md)**
   Metrics, logging, and runtime security alerts using Prometheus, Grafana, and Falco.
 
