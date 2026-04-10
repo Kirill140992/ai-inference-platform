@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: qdrant-vector-db
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: 'https://qdrant.github.io/qdrant-helm'
+    targetRevision: 0.7.6
+    chart: qdrant
+    helm:
+      valueFiles:
+        - https://raw.githubusercontent.com/Kirill140992/ai-inference-platform/main/helm/qdrant/values.yaml
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: ai-platform
