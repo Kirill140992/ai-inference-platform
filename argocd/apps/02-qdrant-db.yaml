@@ -12,6 +12,7 @@ spec:
     targetRevision: 0.7.6
     chart: qdrant
     helm:
+      releaseName: qdrant
       valueFiles:
         - https://raw.githubusercontent.com/Kirill140992/ai-inference-platform/main/helm/qdrant/values.yaml
   destination:
