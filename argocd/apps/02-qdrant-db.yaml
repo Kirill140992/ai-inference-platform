@@ -9,7 +9,7 @@ spec:
   project: default
   source:
     repoURL: 'https://qdrant.github.io/qdrant-helm'
-    targetRevision: 0.7.6
+    targetRevision: 1.17.0
     chart: qdrant
     helm:
       releaseName: qdrant
