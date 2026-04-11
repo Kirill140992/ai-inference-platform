@@ -18,6 +18,7 @@ spec:
         - kyverno
         - monitoring
         - trivy-system
+        - argocd
     validate:
       message: "Running as root is forbidden. Containers must set securityContext.runAsNonRoot to true."
       pattern:
