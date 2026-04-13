@@ -53,3 +53,12 @@ resource "aws_s3_bucket_public_access_block" "qdrant_backups_public_access" {
    ignore_public_acls      = true
    restrict_public_buckets = true
 }
+
+terraform {
+  cloud {
+    organization = "kier-che-inc"
+    workspaces {
+      name = "ai-platform-aws"
+    }
+  }
+}

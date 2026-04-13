@@ -26,3 +26,10 @@ spec:
           podSelector: {}
           policyTypes:
           - Ingress
+          - Egress
+          Egress:
+          - ports:
+            - protocol: UDP
+              port: 53
+            - protocol: TCP
+              port: 53

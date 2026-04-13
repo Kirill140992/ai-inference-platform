@@ -1,5 +1,6 @@
 grafana:
-  adminPassword: "admin123"
+  admin:
+      existingSecret: grafana-admin-credentials
 
   service:
     type: ClusterIP
