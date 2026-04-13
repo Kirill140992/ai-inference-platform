@@ -5,6 +5,8 @@ metadata:
   namespace: ai-platform
   labels:
     app: evm-node
+  annotations:
+    checkov.io/skip1: "CKV2_K8S_6=NetworkPolicy is handled globally by Kyverno"
 spec:
   replicas: 1
   selector:
@@ -15,13 +17,27 @@ spec:
       labels:
         app: evm-node
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: anvil
-          image: ghcr.io/foundry-rs/foundry:latest
+          image: ghcr.io/foundry-rs/foundry@sha256:d8a25c11bc329a4a7536d1b643a7587841c1eb7c461e71ba2b528be8ed3533be
           command: ["anvil", "--host", "0.0.0.0", "--block-time", "2"]
           ports:
             - containerPort: 8545
               name: rpc
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
           resources:
             requests:
               cpu: "100m"
