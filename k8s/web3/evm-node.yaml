@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evm-node
+  namespace: ai-platform
+  labels:
+    app: evm-node
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: evm-node
+  template:
+    metadata:
+      labels:
+        app: evm-node
+    spec:
+      containers:
+        - name: anvil
+          image: ghcr.io/foundry-rs/foundry:latest
+          command: ["anvil", "--host", "0.0.0.0", "--block-time", "2"]
+          ports:
+            - containerPort: 8545
+              name: rpc
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: evm-node
+  namespace: ai-platform
+  labels:
+    app: evm-node
+spec:
+  selector:
+    app: evm-node
+  ports:
+    - name: rpc
+      port: 8545
+      targetPort: 8545
+  type: ClusterIP
