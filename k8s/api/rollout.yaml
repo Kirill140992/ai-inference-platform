@@ -44,6 +44,9 @@ spec:
               value: "8000"
             - name: QDRANT_URL
               value: "http://qdrant:6333"
+            - name: EVM_RPC_URL
+              value: "http://evm-node.ai-platform.svc.cluster.local:8545"
+
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
