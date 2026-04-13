@@ -1,5 +1,5 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: api-go
   namespace: ai-platform
@@ -9,17 +9,24 @@ metadata:
     checkov.io/skip1: "CKV_K8S_43=Using image tags for dev environment"
     checkov.io/skip2: "CKV2_K8S_6=NetworkPolicy is handled globally by Kyverno"
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: api-go
+  strategy:
+    canary:
+      steps:
+        - setWeight: 20
+        - pause: {duration: 30s}
+        - setWeight: 50
+        - pause: {}
   template:
     metadata:
       labels:
         app: api-go
       annotations:
-            checkov.io/skip1: "CKV_K8S_43=Using image tags for dev environment instead of sha256 digests"
-            checkov.io/skip2: "CKV2_K8S_6=NetworkPolicy is handled globally by Kyverno/Cilium"
+        checkov.io/skip1: "CKV_K8S_43=Using image tags for dev environment"
+        checkov.io/skip2: "CKV2_K8S_6=NetworkPolicy is handled globally by Kyverno/Cilium"
     spec:
       automountServiceAccountToken: false
       securityContext:

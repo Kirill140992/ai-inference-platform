@@ -17,6 +17,13 @@ kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/${
 echo "Waiting for ArgoCD server..."
 kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=300s
 
+echo "Installing Argo Rollouts..."
+kubectl create namespace argo-rollouts
+kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+echo "Waiting for Argo Rollouts controller..."
+kubectl wait --for=condition=available deployment/argo-rollouts -n argo-rollouts --timeout=300s
+
 kubectl apply -f https://raw.githubusercontent.com/Kirill140992/ai-inference-platform/main/argocd/root-app.yaml
 
 echo "Bootstrap Complete! ArgoCD is now managing the cluster."
