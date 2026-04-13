@@ -27,7 +27,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: anvil
-          image: ghcr.io/foundry-rs/foundry@sha256:d8a25c11bc329a4a7536d1b643a7587841c1eb7c461e71ba2b528be8ed3533be
+          image: ghcr.io/foundry-rs/foundry@sha256:6e0310238e55139c89ce58eb1dbb5b9e07fbb80b72a6b412bfd381cf87474a58
+          imagePullPolicy: IfNotPresent
           command: ["anvil", "--host", "0.0.0.0", "--block-time", "2"]
           ports:
             - containerPort: 8545
