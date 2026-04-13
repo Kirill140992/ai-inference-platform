@@ -1,5 +1,6 @@
 grafana:
   admin:
+      # checkov:skip=CKV_SECRET_6: False positive, this is just a k8s resource name, not a password
       existingSecret: grafana-admin-credentials
 
   service:
