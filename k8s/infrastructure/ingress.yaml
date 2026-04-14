@@ -5,10 +5,13 @@ metadata:
   namespace: argocd
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
-    traefik.ingress.kubernetes.io/router.tls: "true"
+
 
 spec:
   ingressClassName: traefik
+  tls:
+    - hosts:
+        - argo.ubtk.dev
   rules:
     - host: argo.ubtk.dev
       http:
@@ -28,9 +31,11 @@ metadata:
   namespace: monitoring
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
-    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
   ingressClassName: traefik
+  tls:
+    - hosts:
+        - grafana.ubtk.dev
   rules:
     - host: grafana.ubtk.dev
       http:
