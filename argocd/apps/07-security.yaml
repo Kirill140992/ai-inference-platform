@@ -1,19 +1,20 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: platform-infrastructure
+  name: platform-security
   namespace: argocd
   annotations:
-    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: default
   source:
     repoURL: 'https://github.com/Kirill140992/ai-inference-platform.git'
     targetRevision: HEAD
-    path: k8s/namespaces
+    path: k8s/security
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: default
   syncPolicy:
-    syncOptions:
-      - CreateNamespace=true
+    automated:
+      prune: true
+      selfHeal: true
