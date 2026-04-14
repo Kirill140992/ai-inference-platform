@@ -5,8 +5,8 @@ metadata:
   namespace: argocd
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web
-    traefik.ingress.kubernetes.io/router.tls: "true"
-    traefik.ingress.kubernetes.io/router.tls.options: default
+    ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
 spec:
   ingressClassName: traefik
   rules:
@@ -19,7 +19,7 @@ spec:
               service:
                 name: argocd-server
                 port:
-                  number: 443
+                  number: 80
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
