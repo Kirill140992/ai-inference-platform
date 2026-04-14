@@ -8,6 +8,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.tls: "true"
     traefik.ingress.kubernetes.io/router.tls.options: default
 spec:
+  ingressClassName: traefik
   rules:
     - host: argo.ubtk.dev
       http:
