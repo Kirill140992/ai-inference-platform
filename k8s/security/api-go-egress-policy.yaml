@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-go-egress-qdrant-dns
+  namespace: ai-platform
+spec:
+  podSelector:
+    matchLabels:
+      app: api-go
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution. Mirrors the default-deny baseline so api-go can resolve
+    # the `qdrant` Service name regardless of cluster DNS topology.
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # api-go -> Qdrant: REST (6333) and gRPC (6334). Counterpart to the
+    # qdrant-ingress-only-api-go ingress policy in qdrant-network-policy.yaml.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: qdrant
+      ports:
+        - protocol: TCP
+          port: 6333
+        - protocol: TCP
+          port: 6334
