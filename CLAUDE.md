@@ -12,10 +12,11 @@ By **~early September** (hiring season): close the must-ship features + English 
 
 ## What we want to do now (backlog, prioritized)
 
-Full specs in `docs/book-issues/`. Order of execution and priority (cut from the tail under pressure, not the head):
+Full specs in `docs/book-issues/`. Execution order: **#0 → #4 → #3 → #1 → #2** (cut from the tail under pressure, not the head):
 
-1. **#4 Inference benchmark + vLLM optimization** — *must*. **Start here:** independent, closest to DevOps, fast warm-up. Book: Inference Optimization.
-2. **#3 Offline eval harness** (recall@k / MRR / nDCG) — *must*. Rarest market signal; the measuring stick for everything else. Book: Evaluation.
+0. **#0 Bring up Vast.ai vLLM + Tailscale + wire embeddings** — *must, blocks everything*. **Start here.** The embeddings/vLLM backend is currently a stub (`app/api-go/main.go` ~L453); nothing computes on the GPU yet. This completes the core RAG path so the rest can be measured. (ROADMAP #3 / ADR-002.)
+1. **#4 Inference benchmark + vLLM optimization** — *must*. Closest to DevOps; **needs #0** (a live vLLM endpoint to measure). Book: Inference Optimization.
+2. **#3 Offline eval harness** (recall@k / MRR / nDCG) — *must*. Rarest market signal; the measuring stick for everything else. **Needs #0.** Book: Evaluation.
 3. **#1 Reranker** — *should*. Clean before/after when paired with eval. Book: RAG & Agents.
 4. **#2 Hybrid (lexical + dense) search** — *defer if time is short*. Overlaps the "improved retrieval" story. Book: RAG & Agents.
 5. **Writeup (English)** per feature — **not optional**. Recruiters read the repo, not run it. Doubles as IELTS practice.
@@ -32,8 +33,10 @@ Full specs in `docs/book-issues/`. Order of execution and priority (cut from the
 
 - **api-go** (stateless, Go 1.24, single `app/api-go/main.go` today): retrieval + ingestion, OpenAI-compatible calls to vLLM, exposes Prometheus metrics.
 - **Qdrant** (stateful, PVC): vectors + chunk payloads + metadata. The only durable data layer (Git is source-of-truth #1, Qdrant PVC is #2).
-- **vLLM** (external GPU host, outside k3s): embeddings + optional generation. **Most failure-prone path:** `api-go → external GPU host → vLLM`.
+- **vLLM** (external GPU host = **Vast.ai**, outside k3s): embeddings + optional generation. **Most failure-prone path:** `api-go → Tailscale → Vast.ai vLLM`.
 - **Hard rule:** the same embedding model **and** vector dimension must be used across ingestion and query, or retrieval silently breaks.
+- **Topology:** k3s runs **locally (homelab)**; vLLM runs on a **rented Vast.ai GPU** reached over a private **Tailscale** tunnel. ArgoCD in local k3s still pulls from GitHub.
+- **Current status:** api-go ↔ Qdrant works locally; the **vLLM/embeddings backend is still a stub** (`main.go` ~L453) — wiring it is **#0**.
 
 ## Commands
 

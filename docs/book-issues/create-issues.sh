@@ -24,6 +24,7 @@ ensure_label "ai-engineering-book" "5319e7" "Applied task from AI Engineering (C
 ensure_label "rag"                 "0e8a16" "Retrieval-augmented generation"
 ensure_label "evaluation"          "fbca04" "Quality evaluation / metrics"
 ensure_label "performance"         "d93f0b" "Latency / throughput / cost"
+ensure_label "infra"               "1d76db" "Platform / networking / bring-up"
 
 create () {
   local title="$1" labels="$2" body="$3"
@@ -31,6 +32,8 @@ create () {
   gh issue create --repo "$REPO" --title "$title" --label "$labels" --body-file "$body"
 }
 
+create "Infra: bring up Vast.ai vLLM + Tailscale + wire embeddings (core RAG path)" \
+  "enhancement,infra" "00-bringup-vast-tailscale.md"
 create "RAG: add a reranking stage to retrieval" \
   "enhancement,rag,ai-engineering-book" "01-reranker.md"
 create "RAG: add hybrid (lexical + dense) search" \
