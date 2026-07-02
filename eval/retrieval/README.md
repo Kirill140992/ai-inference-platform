@@ -1,6 +1,8 @@
 # Retrieval eval dataset (#3)
 
-Labeled `query → expected document` pairs over the `demo-docs/` corpus. This is the measuring stick for `#3` (offline eval harness) and the before/after gate for `#1` (reranker) and `#2` (hybrid search). Target size: **30–50 pairs** (currently 12 — grown incrementally, ~5–10 per session).
+Labeled `query → expected document` pairs over the `demo-docs/` corpus. This is the measuring stick for `#3` (offline eval harness) and the before/after gate for `#1` (reranker) and `#2` (hybrid search). Target size: **30–50 pairs** (currently 50 — the target is met; when new docs land in `demo-docs/`, add pairs for them and retire any that stop being answerable).
+
+Curation process for the bulk of the set (q013–q050): candidate pairs were authored per-document, then every candidate was cross-checked against all other corpus docs for ambiguity; ambiguous ones were either dropped or re-sharpened so only the expected document answers them. Queries that merely copied incident details or enumerated the answer options were rejected as too leading.
 
 ## Format
 
