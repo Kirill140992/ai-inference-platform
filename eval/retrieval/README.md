@@ -28,3 +28,13 @@ One JSON object per line (`retrieval-eval.jsonl`):
 ## Validation
 
 `python3 eval/retrieval/validate.py` checks that every line parses, every `expected_doc` exists, and every `answer_snippet` is verbatim in its document. Run it after adding pairs.
+
+## Harness (#3)
+
+- `harness.py` — CLI: loads the dataset, runs each query through a retriever, prints a metrics table (overall + per query type), optionally saves a baseline JSON (`--save LABEL` → `baselines/`) for before/after comparisons.
+- `metrics.py` — recall@k / MRR / nDCG@k. **Formulas are deliberately TODO** — implementing them against the book chapters is the core learning work of #3. Definitions and worked examples are in the docstrings.
+- `test_metrics.py` — hand-computed expected values; the work loop is: implement a function in `metrics.py` → `python3 eval/retrieval/test_metrics.py` → repeat until green.
+
+Two retrievers are built in: `--retriever lexical` (token-overlap baseline over `demo-docs/`, runs today with no services — this is the "before" number dense retrieval must beat) and `--retriever api` (calls the platform's `POST /search` once #0 Checkpoint 2 lands; the expected request/response contract is documented in `harness.py`).
+
+Once metrics are implemented: `python3 eval/retrieval/harness.py --retriever lexical --save lexical-baseline` produces the first real row for the README results table — before any GPU exists.

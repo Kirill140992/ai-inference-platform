@@ -7,7 +7,8 @@ Build a fixed offline evaluation set + harness to measure retrieval quality over
 
 ## Scope
 - Curate 30–50 `query → expected chunk/doc` pairs over the existing `demo-docs` corpus.
-  - **Started:** a 12-pair seed lives in `eval/retrieval/retrieval-eval.jsonl` (format + labeling guidelines in `eval/retrieval/README.md`, verbatim-snippet check in `validate.py`). Labeling doesn't depend on #0 — keep growing it ~5–10 pairs per session in the background.
+  - **Done:** 52 cross-checked pairs live in `eval/retrieval/retrieval-eval.jsonl` (format + curation process in `eval/retrieval/README.md`, verbatim-snippet check in `validate.py`).
+- **Harness skeleton in place** (`harness.py`: CLI, dataset loading, lexical-baseline + api retrievers, aggregation, baseline saving). The remaining work — and the point of this issue — is implementing `metrics.py` (recall@k / MRR / nDCG) until `test_metrics.py` passes, then recording the lexical baseline. The api retriever documents the `POST /search` contract #0 Checkpoint 2 should implement.
 - Harness computing recall@k, MRR, and nDCG@k.
 - One command to run; prints a metrics table; stores a baseline.
 - (Optional) wire into CI to flag retrieval regressions on PRs.
