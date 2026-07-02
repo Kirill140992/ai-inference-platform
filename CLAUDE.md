@@ -20,6 +20,7 @@ Full specs in `docs/book-issues/`. Execution order: **#0 → #4 → #3 → #1 �
 3. **#1 Reranker** — *should*. Clean before/after when paired with eval. Book: RAG & Agents.
 4. **#2 Hybrid (lexical + dense) search** — *defer if time is short*. Overlaps the "improved retrieval" story. Book: RAG & Agents.
 5. **Writeup (English)** per feature — **not optional**. Recruiters read the repo, not run it. Doubles as IELTS practice.
+6. **#5 On-chain ingest anchoring (evm-node)** — *nice-to-have, strictly after #3/#4*. Anchor content hashes of ingested docs on the anvil chain (`k8s/web3/`) as a tamper-evident audit trail; wires up the currently-dead `EVM_RPC_URL`. ADR must be honest that a self-controlled dev chain demonstrates the anchoring pattern, not a trust model. Do NOT start this before the must-ship items — it's the first thing to cut.
 
 ## Definition of done (every feature)
 

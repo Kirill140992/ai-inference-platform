@@ -72,7 +72,7 @@ Running the full stack (Qdrant + vLLM + k3s) is described in the [infrastructure
 - `terraform/` — AWS / Hetzner IaC
 - `demo-docs/` — architecture, ADRs, runbooks, postmortems
 - `docs/book-issues/` — current feature backlog (in-flight work)
-- `k8s/web3/` — a Foundry/anvil dev chain from an earlier, unrelated experiment; not part of the RAG/MLOps path and not wired into `api-go` (slated for removal)
+- `k8s/web3/` — a Foundry/anvil dev chain for a planned experiment: on-chain integrity anchoring of ingested documents (hash-per-ingest audit trail for the knowledge base). Deferred until the MLOps must-ship items land; not yet wired into `api-go`
 
 ## About
 

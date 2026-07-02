@@ -50,3 +50,7 @@ The AI Inference Platform is continuously evolving. The roadmap is divided into 
 
 ### 9. Distributed Tracing
 * **Implementation:** Instrumenting the Go API with **OpenTelemetry (OTel)** and deploying Jaeger to visualize latency bottlenecks across the multi-component RAG pipeline.
+
+### 10. On-Chain Knowledge-Base Integrity Anchoring
+* **Objective:** Tamper-evident audit trail for the knowledge base: anchor a content hash per ingested document on the in-cluster EVM dev chain (`k8s/web3/`, Foundry/anvil), verifiable via an api-go endpoint.
+* **Scope note:** the dev chain demonstrates the anchoring pattern and Go↔EVM integration, not a decentralized trust model — the ADR must state this limitation explicitly. Tracked as backlog item `#5` in CLAUDE.md; strictly after the MLOps must-ship items.
