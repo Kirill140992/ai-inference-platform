@@ -44,7 +44,7 @@ Full specs in `docs/book-issues/`. Execution order: **#0 → #4 → #3 → #1 �
 - Run locally: `cd app/api-go && go run .`
 - Test / vet / fmt: `go test ./...` · `go vet ./...` · `gofmt -l .`
 - Container: `docker build app/api-go`
-- No Makefile yet — fine to add one with `bench` / `eval` / `test` targets when we start #4.
+- Makefile at repo root: `make test` / `make vet` / `make fmt-check` / `make eval` (dataset validation) / `make mock-vllm` (local vLLM stub) / `make bench` (stub until #4).
 
 ## Conventions
 
