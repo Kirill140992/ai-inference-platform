@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -74,5 +76,120 @@ func TestChunkTextLongParagraphSplitsWithOverlap(t *testing.T) {
 		if !overlaps {
 			t.Fatalf("expected chunk %d and chunk %d to overlap by at least one word, got %v | %v", i, i+1, curWords, nextWords)
 		}
+	}
+}
+
+func TestNormalizeDistance(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"empty defaults to cosine", "", "Cosine", false},
+		{"lowercase cosine", "cosine", "Cosine", false},
+		{"mixed case", "CoSiNe", "Cosine", false},
+		{"dot", "dot", "Dot", false},
+		{"euclid", "euclid", "Euclid", false},
+		{"manhattan", "manhattan", "Manhattan", false},
+		{"unsupported value errors", "jaccard", "", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeDistance(tc.input)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("normalizeDistance(%q): expected an error, got none", tc.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeDistance(%q): unexpected error: %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("normalizeDistance(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHandleDocumentsValidation(t *testing.T) {
+	app := &App{httpClient: &http.Client{}, qdrantURL: "http://unused.invalid"}
+
+	cases := []struct {
+		name       string
+		method     string
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "wrong method rejected",
+			method:     http.MethodGet,
+			body:       "",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+		{
+			name:       "invalid json body rejected",
+			method:     http.MethodPost,
+			body:       "{not json",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "missing document_id rejected",
+			method:     http.MethodPost,
+			body:       `{"title":"t","source":"s","content":"c","dry_run":true}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "chunk_size below minimum rejected",
+			method:     http.MethodPost,
+			body:       `{"document_id":"d1","title":"t","source":"s","content":"some content long enough","chunk_size":100,"dry_run":true}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "chunk_overlap not smaller than chunk_size rejected",
+			method:     http.MethodPost,
+			body:       `{"document_id":"d1","title":"t","source":"s","content":"some content long enough","chunk_size":300,"chunk_overlap":300,"dry_run":true}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "valid dry run request succeeds",
+			method:     http.MethodPost,
+			body:       `{"document_id":"d1","title":"t","source":"s","content":"# Heading\n\nSome content.","dry_run":true}`,
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "/documents", strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+
+			app.handleDocuments(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestHandleDocumentsNonDryRunStillStubbed pins today's #0-pending behavior:
+// a real (non-dry-run) ingest request returns 501 because embeddings/Qdrant
+// upsert aren't wired yet. Once #0 lands this test should start failing —
+// that's the signal to replace it with a test of the real ingest path.
+func TestHandleDocumentsNonDryRunStillStubbed(t *testing.T) {
+	app := &App{httpClient: &http.Client{}, qdrantURL: "http://unused.invalid"}
+
+	body := `{"document_id":"d1","title":"t","source":"s","content":"# Heading\n\nSome content.","dry_run":false}`
+	req := httptest.NewRequest(http.MethodPost, "/documents", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	app.handleDocuments(rec, req)
+
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotImplemented)
 	}
 }
