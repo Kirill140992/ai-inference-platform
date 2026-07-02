@@ -25,7 +25,7 @@ Two independent checkpoints. Verify each before moving to the next — this make
 - [ ] Verify private connectivity (`tailscale ping`, `curl …/v1/models`).
 - [ ] ACL: only api-go's node may reach the vLLM port. Auth key handled out-of-band, **never committed**.
 
-**Checkpoint 1 done when:** `curl http://<tailscale-ip>:8000/v1/models` from the local k3s node returns a model list over the tailnet — zero involvement from api-go. If this doesn't work, it's a GPU/network problem, not a code problem; don't touch `main.go` until it does.
+**Checkpoint 1 done when:** `curl http://<tailscale-ip>:8000/v1/models` from the local k3s node returns a model list over the tailnet — zero involvement from api-go. If this doesn't work, it's a GPU/network problem, not a code problem; don't touch `main.go` until it does. Run `scripts/checkpoint1-smoke-test.sh <tailscale-host> [vllm-port]` to check this automatically (tailscale status → tailscale ping → curl /v1/models).
 
 ### Checkpoint 2 — api-go wired end-to-end
 
@@ -34,7 +34,7 @@ Two independent checkpoints. Verify each before moving to the next — this make
 - [ ] Implement a real call to `POST {VLLM_URL}/embeddings` where the stub is (~L453).
 - [ ] Ingestion: chunk → embed via vLLM → upsert to Qdrant. Query: embed query → Qdrant search.
 - [ ] Create the Qdrant collection with `EMBEDDING_DIM` (via the existing `/collections/init`).
-- [ ] Add Prometheus metrics for vLLM calls (latency, errors) — mirror the existing qdrant metrics; this pre-builds what #4 measures.
+- [ ] Add Prometheus metrics for vLLM calls (latency, errors) — mirror the existing qdrant metrics (`qdrantRequestDuration`, `qdrantRequestErrorsTotal` in `main.go`). **Use these exact metric names** so the dashboard provisioned in `k8s/monitoring/api-go-dashboard.yaml` lights up without edits: `vllm_request_duration_seconds` (HistogramVec, labels `method`/`path`/`status`) and `vllm_request_errors_total` (CounterVec, labels `method`/`path`). This pre-builds what #4 measures.
 - [ ] `/ready` fails if vLLM is unreachable (dependency health).
 - [ ] **Enforce the embedding-dimension hard rule, don't just document it:** persist `EMBEDDING_MODEL`/`EMBEDDING_DIM` alongside the Qdrant collection (e.g. as collection metadata, or a small config record api-go checks on startup) and fail loudly — not silently degrade retrieval — if a later deploy's configured model/dim doesn't match what the collection was created with.
 

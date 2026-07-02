@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-go-overview-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  api-go-overview.json: |
+    {
+      "title": "api-go overview",
+      "uid": "api-go-overview",
+      "tags": ["api-go", "ai-inference-platform"],
+      "timezone": "utc",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-6h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "api-go request rate by status",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "expr": "sum(rate(api_request_duration_seconds_count[5m])) by (status)",
+              "legendFormat": "{{status}}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "api-go request latency p95",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(api_request_duration_seconds_bucket[5m])) by (le, path))",
+              "legendFormat": "{{path}}"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Qdrant request latency p95 (via api-go)",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(qdrant_request_duration_seconds_bucket[5m])) by (le, path))",
+              "legendFormat": "{{path}}"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "api-go readiness failures (Qdrant/vLLM dependency down)",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "targets": [
+            {
+              "expr": "rate(api_readiness_failures_total[5m])",
+              "legendFormat": "readiness failures/s"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "vLLM request latency p50 / p95 [pending #0 — no data until embeddings backend is wired]",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(vllm_request_duration_seconds_bucket[5m])) by (le))",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(vllm_request_duration_seconds_bucket[5m])) by (le))",
+              "legendFormat": "p95"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "vLLM error rate [pending #0 — no data until embeddings backend is wired]",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "targets": [
+            {
+              "expr": "rate(vllm_request_errors_total[5m])",
+              "legendFormat": "{{method}} {{path}}"
+            }
+          ]
+        }
+      ]
+    }
