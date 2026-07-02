@@ -23,6 +23,38 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # UNIT TESTS: Go (build / vet / fmt / test) — the app/api-go Definition of
+  # Done requires "go test ./... passes"; this makes that a real CI gate
+  # instead of an unverified claim per commit.
+  unit-tests:
+    name: Unit Tests (Go)
+    runs-on: ubuntu-latest
+    needs: secret-scanning
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: app/api-go/go.mod
+      - name: go build
+        working-directory: app/api-go
+        run: go build ./...
+      - name: go vet
+        working-directory: app/api-go
+        run: go vet ./...
+      - name: gofmt check
+        working-directory: app/api-go
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go test
+        working-directory: app/api-go
+        run: go test ./... -v
+
   # 2. SAST: SEMGREP
   sast-semgrep:
     name: SAST (Semgrep)
@@ -111,7 +143,7 @@ jobs:
   dast-zap:
     name: DAST (OWASP ZAP)
     runs-on: ubuntu-latest
-    needs: [sast-semgrep, sca-iac-trivy]
+    needs: [sast-semgrep, sca-iac-trivy, unit-tests]
     steps:
       - name: Checkout
         uses: actions/checkout@v4

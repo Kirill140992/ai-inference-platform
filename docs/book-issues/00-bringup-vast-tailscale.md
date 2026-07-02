@@ -49,9 +49,17 @@ Two independent checkpoints. Verify each before moving to the next — this make
 - [ ] ADR `demo-docs/adr-003-vast-tailscale-bringup.md`: topology, model + dimension, cost, ACLs, failure modes.
 
 ## Cost / pace note
-Vast.ai is hourly — bring the GPU up only during work blocks. For wiring/dev, use a tiny local/CPU embedding model; point at Vast only for real benchmarks (#4).
+Vast.ai is hourly — bring the GPU up only during work blocks. For wiring/dev, run the local OpenAI-compatible stub instead of the real GPU:
+
+```
+cd app/api-go && go run ./cmd/mock-vllm
+```
+
+Serves `/v1/models` + `/v1/embeddings` on `:8000` with deterministic fake vectors (same input text → same vector, so retrieval-logic tests are meaningful) and configurable `-dim`/`-model`/`-port` flags. Point `VLLM_URL` at it while writing and testing all of Checkpoint 2 — no cost, no network dependency. Point at the real Vast.ai endpoint only for the final end-to-end pass (Checkpoint 2's acceptance criteria) and for real benchmarks (#4).
 
 ## References
 - `app/api-go/main.go` (~L453 stub, `getEnv`, `QDRANT_URL`, `/collections/init`)
+- `app/api-go/cmd/mock-vllm/main.go` — local OpenAI-compatible vLLM stub for wiring/dev
+- `scripts/checkpoint1-smoke-test.sh` — automates the Checkpoint 1 verification above
 - ROADMAP #3 (ZTNA / Tailscale / Vast.ai) · `demo-docs/adr-002-why-external-gpu-host.md`
 - `demo-docs/architecture-overview.md` (failure mode: "vLLM unavailable")
