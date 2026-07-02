@@ -31,15 +31,15 @@ Design trade-offs are written up as ADRs: [why Qdrant over a managed vector DB](
 
 ## Results & benchmarks
 
-> Measurement-first: every number below is produced by the eval harness and load tests **in this repo**, not hand-waved. _Populated as the eval/inference work lands — see the backlog._
+**Status: in progress, not yet populated.** This section will hold measured before/after numbers (recall@k, MRR/nDCG, vLLM latency/throughput, reranker lift) produced by the eval harness and load tests in this repo — not vendor claims. It's empty because the embeddings/vLLM backend ([`#0`](docs/book-issues/00-bringup-vast-tailscale.md)) hasn't landed yet; see the [backlog](docs/book-issues/) for what's shipped vs. planned.
 
-| Metric | Baseline | Current | How it's measured |
-|---|---|---|---|
-| Retrieval recall@5 | _TBD_ | _TBD_ | offline eval set ([`#3`](docs/book-issues/03-offline-eval.md)) |
-| Retrieval MRR / nDCG@10 | _TBD_ | _TBD_ | offline eval set ([`#3`](docs/book-issues/03-offline-eval.md)) |
-| vLLM latency p50 / p95 | _TBD_ | _TBD_ | load test ([`#4`](docs/book-issues/04-inference-benchmark.md)) |
-| vLLM throughput (tok/s · max QPS) | _TBD_ | _TBD_ | load test ([`#4`](docs/book-issues/04-inference-benchmark.md)) |
-| Reranker precision lift | _TBD_ | _TBD_ | before/after vs eval set ([`#1`](docs/book-issues/01-reranker.md)) |
+| Metric | Status | How it will be measured |
+|---|---|---|
+| Retrieval recall@5 | not started | offline eval set ([`#3`](docs/book-issues/03-offline-eval.md)) |
+| Retrieval MRR / nDCG@10 | not started | offline eval set ([`#3`](docs/book-issues/03-offline-eval.md)) |
+| vLLM latency p50 / p95 | not started | load test ([`#4`](docs/book-issues/04-inference-benchmark.md)) |
+| vLLM throughput (tok/s · max QPS) | not started | load test ([`#4`](docs/book-issues/04-inference-benchmark.md)) |
+| Reranker precision lift | not started | before/after vs eval set ([`#1`](docs/book-issues/01-reranker.md)) |
 
 ## Engineering depth
 
@@ -72,6 +72,7 @@ Running the full stack (Qdrant + vLLM + k3s) is described in the [infrastructure
 - `terraform/` — AWS / Hetzner IaC
 - `demo-docs/` — architecture, ADRs, runbooks, postmortems
 - `docs/book-issues/` — current feature backlog (in-flight work)
+- `k8s/web3/` — a Foundry/anvil dev chain from an earlier, unrelated experiment; not part of the RAG/MLOps path and not wired into `api-go` (slated for removal)
 
 ## About
 

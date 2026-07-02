@@ -60,3 +60,8 @@ Full specs in `docs/book-issues/`. Execution order: **#0 → #4 → #3 → #1 �
 - ~2 focused blocks/week, **not all weekend**; one rest day stays protected. Quality > volume.
 - Practice > theory: read the relevant book chapter, then straight into code.
 - **Don't gold-plate:** must/should core + writeup → stop. Flag scope creep instead of adding features.
+
+## Checkpoints & risk controls
+
+- **Go/no-go checkpoint: 2026-07-21** (~3 weeks out). If `#0` is not merged by then, stop and re-plan immediately: drop `#2` and `#1`, and scope `#4`/`#3` down to whatever's realistically achievable with the time left. If the date needs to move, move it explicitly and write down why — don't let it slide silently. The plan already went quiet once with no adjustment recorded (2026-04-14 → 2026-07-01, ~11 weeks, zero commits despite the "~2 blocks/week" pace above).
+- **Vast.ai cost discipline** (surfaced here, not just in the `#0` book-issue): only run the rented GPU instance during an active work block; stop/destroy it before closing the session. Use a small local/CPU embedding model for wiring and dev; rent the real GPU only for the final `#0` end-to-end pass and for `#4` benchmark runs.
