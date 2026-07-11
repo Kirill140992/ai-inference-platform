@@ -55,7 +55,7 @@ Vast.ai is hourly — bring the GPU up only during work blocks. For wiring/dev, 
 cd app/api-go && go run ./cmd/mock-vllm
 ```
 
-Serves `/v1/models` + `/v1/embeddings` on `:8000` with deterministic fake vectors (same input text → same vector, so retrieval-logic tests are meaningful) and configurable `-dim`/`-model`/`-port` flags. Point `VLLM_URL` at it while writing and testing all of Checkpoint 2 — no cost, no network dependency. Point at the real Vast.ai endpoint only for the final end-to-end pass (Checkpoint 2's acceptance criteria) and for real benchmarks (#4).
+Serves `/v1/models` + `/v1/embeddings` on `:8001` (api-go's `VLLM_URL` default already points there, so both run side-by-side with zero config) with deterministic fake vectors (same input text → same vector, so retrieval-logic tests are meaningful) and configurable `-dim`/`-model`/`-port` flags. Point at the real Vast.ai endpoint only for the final end-to-end pass (Checkpoint 2's acceptance criteria) and for real benchmarks (#4).
 
 ## References
 - `app/api-go/main.go` (~L453 stub, `getEnv`, `QDRANT_URL`, `/collections/init`)

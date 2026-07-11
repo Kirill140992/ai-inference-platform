@@ -209,6 +209,8 @@ func TestHandleDocumentsRealIngestUpserts(t *testing.T) {
 	}))
 	defer vllm.Close()
 
+	var deleted QdrantDeleteRequest
+	deleteHappenedFirst := false
 	var upserted QdrantUpsertRequest
 	qdrant := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -216,6 +218,12 @@ func TestHandleDocumentsRealIngestUpserts(t *testing.T) {
 			_, _ = w.Write([]byte(`{"result":{"config":{"params":{"vectors":{"size":8,"distance":"Cosine"}}}}}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/collections/knowledge/points/scroll":
 			_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/knowledge/points/delete":
+			if err := json.NewDecoder(r.Body).Decode(&deleted); err != nil {
+				t.Errorf("bad delete request body: %v", err)
+			}
+			deleteHappenedFirst = len(upserted.Points) == 0
+			_, _ = w.Write([]byte(`{"result":{"status":"acknowledged"},"status":"ok"}`))
 		case r.Method == http.MethodPut && r.URL.Path == "/collections/knowledge/points":
 			if err := json.NewDecoder(r.Body).Decode(&upserted); err != nil {
 				t.Errorf("bad upsert request body: %v", err)
@@ -248,6 +256,14 @@ func TestHandleDocumentsRealIngestUpserts(t *testing.T) {
 	}
 	if len(upserted.Points) == 0 {
 		t.Fatalf("no points reached the qdrant upsert endpoint")
+	}
+	// Re-ingest must clear previous points for the document before upserting,
+	// or a shorter re-ingest leaves stale chunks in the collection.
+	if len(deleted.Filter.Must) != 1 || deleted.Filter.Must[0].Key != "document_id" || deleted.Filter.Must[0].Match.Value != "d1" {
+		t.Fatalf("expected a delete-by-document_id filter for %q, got %+v", "d1", deleted.Filter)
+	}
+	if !deleteHappenedFirst {
+		t.Fatalf("stale points must be deleted before the new upsert, not after")
 	}
 	for _, p := range upserted.Points {
 		if len(p.Vector) != dim {
@@ -293,6 +309,129 @@ func TestHandleCollectionsInitRejectsMismatchedVectorSize(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
+}
+
+func TestHandleCollectionsInitRequiresName(t *testing.T) {
+	app := &App{httpClient: &http.Client{}, qdrantURL: "http://unused.invalid", embeddingDim: 384, collectionName: "knowledge"}
+
+	req := httptest.NewRequest(http.MethodPost, "/collections/init", strings.NewReader(`{"vector_size":384}`))
+	rec := httptest.NewRecorder()
+
+	app.handleCollectionsInit(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// TestHandleSearchExposesTopLevelDocumentID pins the /search contract that
+// eval/retrieval/harness.py (ApiRetriever) consumes: every result must carry
+// document_id at the top level, not only inside the raw payload.
+func TestHandleSearchExposesTopLevelDocumentID(t *testing.T) {
+	const dim = 8
+
+	vllm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		vec := make([]float64, dim)
+		vec[0] = 1
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"index": 0, "embedding": vec}},
+		})
+	}))
+	defer vllm.Close()
+
+	qdrant := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/collections/knowledge":
+			_, _ = w.Write([]byte(`{"result":{"config":{"params":{"vectors":{"size":8,"distance":"Cosine"}}}}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/knowledge/points/scroll":
+			_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/knowledge/points/search":
+			_, _ = w.Write([]byte(`{"result":[{"score":0.9,"payload":{"document_id":"doc-a","chunk_id":"doc-a::chunk-000","text":"hello"}}]}`))
+		default:
+			t.Errorf("unexpected qdrant request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer qdrant.Close()
+
+	app := &App{
+		httpClient:     &http.Client{},
+		qdrantURL:      qdrant.URL,
+		vllmURL:        vllm.URL,
+		embeddingModel: "test-model",
+		embeddingDim:   dim,
+		collectionName: "knowledge",
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/search", strings.NewReader(`{"query":"hello","top_k":3}`))
+	rec := httptest.NewRecorder()
+
+	app.handleSearch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp SearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode search response: %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp.Results))
+	}
+	if resp.Results[0].DocumentID != "doc-a" {
+		t.Fatalf("top-level document_id = %q, want %q", resp.Results[0].DocumentID, "doc-a")
+	}
+	if resp.Results[0].ChunkID != "doc-a::chunk-000" {
+		t.Fatalf("top-level chunk_id = %q, want %q", resp.Results[0].ChunkID, "doc-a::chunk-000")
+	}
+}
+
+// TestHandleReadyVLLMToggle pins the readiness config toggle: with
+// VLLM_READY_REQUIRED off (the default and the pre-#0 baseline), a dead vLLM
+// must not fail readiness; with it on, it must.
+func TestHandleReadyVLLMToggle(t *testing.T) {
+	qdrant := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/":
+			_, _ = w.Write([]byte(`{"title":"qdrant"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/collections/knowledge":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Errorf("unexpected qdrant request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer qdrant.Close()
+
+	newApp := func(required bool) *App {
+		return &App{
+			httpClient:        &http.Client{},
+			qdrantURL:         qdrant.URL,
+			vllmURL:           "http://127.0.0.1:1/v1", // nothing listens here
+			embeddingModel:    "test-model",
+			embeddingDim:      8,
+			collectionName:    "knowledge",
+			vllmReadyRequired: required,
+		}
+	}
+
+	t.Run("not required: ready despite dead vllm", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		newApp(false).handleReady(rec, httptest.NewRequest(http.MethodGet, "/ready", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+		}
+	})
+
+	t.Run("required: not ready when vllm is dead", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		newApp(true).handleReady(rec, httptest.NewRequest(http.MethodGet, "/ready", nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+		}
+	})
 }
 
 func TestPointIDFromChunkIDDeterministicUUID(t *testing.T) {
