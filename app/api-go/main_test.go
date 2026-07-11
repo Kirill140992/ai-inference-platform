@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -176,12 +178,64 @@ func TestHandleDocumentsValidation(t *testing.T) {
 	}
 }
 
-// TestHandleDocumentsNonDryRunStillStubbed pins today's #0-pending behavior:
-// a real (non-dry-run) ingest request returns 501 because embeddings/Qdrant
-// upsert aren't wired yet. Once #0 lands this test should start failing —
-// that's the signal to replace it with a test of the real ingest path.
-func TestHandleDocumentsNonDryRunStillStubbed(t *testing.T) {
-	app := &App{httpClient: &http.Client{}, qdrantURL: "http://unused.invalid"}
+// TestHandleDocumentsRealIngestUpserts wires handleDocuments against stub
+// vLLM and Qdrant servers (#0 Checkpoint 2): a non-dry-run request must embed
+// every chunk and upsert exactly one point per chunk, stamped with the
+// embedding model and carrying a vector of the configured dimension.
+func TestHandleDocumentsRealIngestUpserts(t *testing.T) {
+	const dim = 8
+
+	vllm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/embeddings" {
+			t.Errorf("unexpected vllm request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+
+		var req EmbeddingsAPIRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("bad embeddings request body: %v", err)
+		}
+
+		data := make([]map[string]interface{}, len(req.Input))
+		for i := range req.Input {
+			vec := make([]float64, dim)
+			vec[0] = float64(i + 1)
+			data[i] = map[string]interface{}{"index": i, "embedding": vec}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
+	}))
+	defer vllm.Close()
+
+	var upserted QdrantUpsertRequest
+	qdrant := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/collections/knowledge":
+			_, _ = w.Write([]byte(`{"result":{"config":{"params":{"vectors":{"size":8,"distance":"Cosine"}}}}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/knowledge/points/scroll":
+			_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/collections/knowledge/points":
+			if err := json.NewDecoder(r.Body).Decode(&upserted); err != nil {
+				t.Errorf("bad upsert request body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"result":{"status":"acknowledged"},"status":"ok"}`))
+		default:
+			t.Errorf("unexpected qdrant request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer qdrant.Close()
+
+	app := &App{
+		httpClient:     &http.Client{},
+		qdrantURL:      qdrant.URL,
+		vllmURL:        vllm.URL + "/v1",
+		embeddingModel: "test-model",
+		embeddingDim:   dim,
+		collectionName: "knowledge",
+	}
 
 	body := `{"document_id":"d1","title":"t","source":"s","content":"# Heading\n\nSome content.","dry_run":false}`
 	req := httptest.NewRequest(http.MethodPost, "/documents", strings.NewReader(body))
@@ -189,7 +243,72 @@ func TestHandleDocumentsNonDryRunStillStubbed(t *testing.T) {
 
 	app.handleDocuments(rec, req)
 
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotImplemented)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if len(upserted.Points) == 0 {
+		t.Fatalf("no points reached the qdrant upsert endpoint")
+	}
+	for _, p := range upserted.Points {
+		if len(p.Vector) != dim {
+			t.Fatalf("upserted vector dimension = %d, want %d", len(p.Vector), dim)
+		}
+		if p.Payload["embedding_model"] != "test-model" {
+			t.Fatalf("payload embedding_model = %v, want %q", p.Payload["embedding_model"], "test-model")
+		}
+		if p.Payload["text"] == "" || p.Payload["text"] == nil {
+			t.Fatalf("upserted point is missing the chunk text in its payload")
+		}
+	}
+}
+
+// TestEmbedTextsDimensionMismatchFailsLoudly pins the hard rule: a backend
+// answering with the wrong vector size must be an error, never an upsert.
+func TestEmbedTextsDimensionMismatchFailsLoudly(t *testing.T) {
+	vllm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"index":0,"embedding":[0.1,0.2,0.3]}]}`))
+	}))
+	defer vllm.Close()
+
+	app := &App{httpClient: &http.Client{}, vllmURL: vllm.URL, embeddingModel: "m", embeddingDim: 8}
+
+	_, err := app.embedTexts([]string{"hello"})
+	if err == nil {
+		t.Fatalf("expected a dimension-mismatch error, got none")
+	}
+	if !strings.Contains(err.Error(), "dimension mismatch") {
+		t.Fatalf("expected a dimension-mismatch error, got: %v", err)
+	}
+}
+
+func TestHandleCollectionsInitRejectsMismatchedVectorSize(t *testing.T) {
+	app := &App{httpClient: &http.Client{}, qdrantURL: "http://unused.invalid", embeddingDim: 384, collectionName: "knowledge"}
+
+	body := `{"name":"knowledge","vector_size":768}`
+	req := httptest.NewRequest(http.MethodPost, "/collections/init", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	app.handleCollectionsInit(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestPointIDFromChunkIDDeterministicUUID(t *testing.T) {
+	a := pointIDFromChunkID("doc::chunk-000")
+	b := pointIDFromChunkID("doc::chunk-000")
+	c := pointIDFromChunkID("doc::chunk-001")
+
+	if a != b {
+		t.Fatalf("same chunk ID produced different point IDs: %q vs %q", a, b)
+	}
+	if a == c {
+		t.Fatalf("different chunk IDs produced the same point ID: %q", a)
+	}
+
+	uuidRe := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	if !uuidRe.MatchString(a) {
+		t.Fatalf("point ID %q is not a valid RFC-4122 UUID", a)
 	}
 }
