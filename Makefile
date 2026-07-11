@@ -10,7 +10,7 @@ help:
 	@echo "  vet        - go vet ./... (app/api-go)"
 	@echo "  fmt-check  - fail if any Go file is not gofmt'd"
 	@echo "  eval       - validate the retrieval eval dataset (harness itself is #3, not built yet)"
-	@echo "  mock-vllm  - run the local OpenAI-compatible vLLM stub on :8000"
+	@echo "  mock-vllm  - run the local OpenAI-compatible vLLM stub on :8001"
 	@echo "  bench      - inference benchmark (#4, not built yet)"
 
 test:

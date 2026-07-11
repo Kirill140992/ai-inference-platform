@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,8 +20,18 @@ import (
 )
 
 type App struct {
-	httpClient *http.Client
-	qdrantURL  string
+	httpClient     *http.Client
+	qdrantURL      string
+	vllmURL        string
+	embeddingModel string
+	embeddingDim   int
+	collectionName string
+	// vllmReadyRequired is the config toggle for the embeddings dependency
+	// (CLAUDE.md DoD: don't break the baseline path). When false (default),
+	// /ready only requires Qdrant — the pre-#0 baseline — so pods stay in
+	// Service while the rented GPU is intentionally stopped between work
+	// blocks. Set VLLM_READY_REQUIRED=true once a real vLLM endpoint exists.
+	vllmReadyRequired bool
 }
 
 type HealthResponse struct {
@@ -29,11 +40,14 @@ type HealthResponse struct {
 }
 
 type ReadyResponse struct {
-	Status    string          `json:"status"`
-	Service   string          `json:"service"`
-	QdrantURL string          `json:"qdrant_url"`
-	Qdrant    json.RawMessage `json:"qdrant,omitempty"`
-	Error     string          `json:"error,omitempty"`
+	Status     string          `json:"status"`
+	Service    string          `json:"service"`
+	QdrantURL  string          `json:"qdrant_url"`
+	Qdrant     json.RawMessage `json:"qdrant,omitempty"`
+	VLLMURL    string          `json:"vllm_url,omitempty"`
+	VLLMModels json.RawMessage `json:"vllm_models,omitempty"`
+	Collection string          `json:"collection,omitempty"`
+	Error      string          `json:"error,omitempty"`
 }
 
 type ErrorResponse struct {
@@ -66,17 +80,121 @@ type DocumentIngestRequest struct {
 }
 
 type DocumentIngestResponse struct {
-	Status       string          `json:"status"`
-	DocumentID   string          `json:"document_id"`
-	Title        string          `json:"title"`
-	Source       string          `json:"source"`
-	ChunkSize    int             `json:"chunk_size"`
-	ChunkOverlap int             `json:"chunk_overlap"`
-	ChunkCount   int             `json:"chunk_count"`
-	ChunkingMode string          `json:"chunking_mode"`
-	ChunkingVer  string          `json:"chunking_version"`
-	DryRun       bool            `json:"dry_run"`
-	Chunks       []DocumentChunk `json:"chunks"`
+	Status        string          `json:"status"`
+	DocumentID    string          `json:"document_id"`
+	Title         string          `json:"title"`
+	Source        string          `json:"source"`
+	ChunkSize     int             `json:"chunk_size"`
+	ChunkOverlap  int             `json:"chunk_overlap"`
+	ChunkCount    int             `json:"chunk_count"`
+	ChunkingMode  string          `json:"chunking_mode"`
+	ChunkingVer   string          `json:"chunking_version"`
+	DryRun        bool            `json:"dry_run"`
+	UpsertedCount int             `json:"upserted_count,omitempty"`
+	Chunks        []DocumentChunk `json:"chunks"`
+}
+
+type SearchRequest struct {
+	Query string `json:"query"`
+	TopK  int    `json:"top_k"`
+}
+
+// SearchResult exposes document_id and chunk_id at the top level — that is
+// the contract eval/retrieval/harness.py (ApiRetriever) consumes; the full
+// Qdrant payload stays available for richer clients.
+type SearchResult struct {
+	Score      float64                `json:"score"`
+	DocumentID string                 `json:"document_id"`
+	ChunkID    string                 `json:"chunk_id"`
+	Payload    map[string]interface{} `json:"payload"`
+}
+
+type SearchResponse struct {
+	Query      string         `json:"query"`
+	Collection string         `json:"collection"`
+	TopK       int            `json:"top_k"`
+	Results    []SearchResult `json:"results"`
+}
+
+// EmbeddingsAPIRequest/Response model the OpenAI-compatible /v1/embeddings
+// contract served by vLLM (and by cmd/mock-vllm for local dev).
+type EmbeddingsAPIRequest struct {
+	Model string   `json:"model"`
+	Input []string `json:"input"`
+}
+
+type EmbeddingsAPIResponse struct {
+	Data []EmbeddingsAPIData `json:"data"`
+}
+
+type EmbeddingsAPIData struct {
+	Index     int       `json:"index"`
+	Embedding []float64 `json:"embedding"`
+}
+
+type QdrantPoint struct {
+	ID      string                 `json:"id"`
+	Vector  []float64              `json:"vector"`
+	Payload map[string]interface{} `json:"payload"`
+}
+
+type QdrantUpsertRequest struct {
+	Points []QdrantPoint `json:"points"`
+}
+
+type QdrantDeleteRequest struct {
+	Filter QdrantFilter `json:"filter"`
+}
+
+type QdrantFilter struct {
+	Must []QdrantFieldCondition `json:"must"`
+}
+
+type QdrantFieldCondition struct {
+	Key   string           `json:"key"`
+	Match QdrantMatchValue `json:"match"`
+}
+
+type QdrantMatchValue struct {
+	Value interface{} `json:"value"`
+}
+
+type QdrantSearchRequest struct {
+	Vector      []float64 `json:"vector"`
+	Limit       int       `json:"limit"`
+	WithPayload bool      `json:"with_payload"`
+}
+
+type QdrantSearchResponse struct {
+	Result []QdrantScoredPoint `json:"result"`
+}
+
+type QdrantScoredPoint struct {
+	Score   float64                `json:"score"`
+	Payload map[string]interface{} `json:"payload"`
+}
+
+type QdrantCollectionInfoResponse struct {
+	Result struct {
+		Config struct {
+			Params struct {
+				Vectors QdrantVectorsConfig `json:"vectors"`
+			} `json:"params"`
+		} `json:"config"`
+	} `json:"result"`
+}
+
+type QdrantScrollRequest struct {
+	Limit       int  `json:"limit"`
+	WithPayload bool `json:"with_payload"`
+}
+
+type QdrantScrollResponse struct {
+	Result struct {
+		Points []struct {
+			Payload map[string]interface{} `json:"payload"`
+		} `json:"points"`
+	} `json:"result"`
 }
 
 type DocumentChunk struct {
@@ -120,6 +238,25 @@ var (
 		[]string{"method", "path"},
 	)
 
+	// Metric names are pinned by k8s/monitoring/api-go-dashboard.yaml and
+	// docs/book-issues/00-bringup-vast-tailscale.md — do not rename.
+	vllmRequestDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "vllm_request_duration_seconds",
+			Help:    "Duration of outbound requests from api-go to the vLLM backend.",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"method", "path", "status"},
+	)
+
+	vllmRequestErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "vllm_request_errors_total",
+			Help: "Total number of outbound request errors from api-go to the vLLM backend.",
+		},
+		[]string{"method", "path"},
+	)
+
 	apiReadinessFailuresTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "api_readiness_failures_total",
@@ -127,12 +264,13 @@ var (
 		},
 	)
 
-	documentChunksProducedTotal = promauto.NewCounterVec(
+	// Deliberately unlabeled: a document_id label would create one time
+	// series per ingested document (unbounded cardinality).
+	documentChunksProducedTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "document_chunks_produced_total",
 			Help: "Total number of document chunks produced by the ingestion endpoint.",
 		},
-		[]string{"document_id"},
 	)
 
 	documentIngestRequestsTotal = promauto.NewCounterVec(
@@ -147,12 +285,27 @@ var (
 func main() {
 	port := getEnv("PORT", "8000")
 	qdrantURL := getEnv("QDRANT_URL", "http://qdrant:6333")
+	// Defaults match cmd/mock-vllm (which listens on :8001 so it never
+	// collides with api-go's own :8000) — the local dev loop needs zero
+	// config; k8s manifests must set these explicitly for the real backend.
+	vllmURL := strings.TrimRight(getEnv("VLLM_URL", "http://localhost:8001/v1"), "/")
+	embeddingModel := getEnv("EMBEDDING_MODEL", "mock-embedding-model")
+	embeddingDim := getEnvInt("EMBEDDING_DIM", 384)
+	collectionName := getEnv("QDRANT_COLLECTION", "knowledge")
+	vllmReadyRequired := getEnvBool("VLLM_READY_REQUIRED", false)
 
 	app := &App{
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			// Generous enough for embedding a full document batch on a real
+			// GPU backend; the mock answers instantly either way.
+			Timeout: 30 * time.Second,
 		},
-		qdrantURL: qdrantURL,
+		qdrantURL:         qdrantURL,
+		vllmURL:           vllmURL,
+		embeddingModel:    embeddingModel,
+		embeddingDim:      embeddingDim,
+		collectionName:    collectionName,
+		vllmReadyRequired: vllmReadyRequired,
 	}
 
 	mux := http.NewServeMux()
@@ -163,6 +316,7 @@ func main() {
 	mux.Handle("/collections", app.instrumentHandler("/collections", http.HandlerFunc(app.handleCollections)))
 	mux.Handle("/collections/init", app.instrumentHandler("/collections/init", http.HandlerFunc(app.handleCollectionsInit)))
 	mux.Handle("/documents", app.instrumentHandler("/documents", http.HandlerFunc(app.handleDocuments)))
+	mux.Handle("/search", app.instrumentHandler("/search", http.HandlerFunc(app.handleSearch)))
 	mux.Handle("/metrics", promhttp.Handler())
 
 	server := &http.Server{
@@ -172,7 +326,8 @@ func main() {
 	}
 
 	log.Printf("starting api-go on port %s", port)
-	log.Printf("using qdrant url: %s", qdrantURL)
+	log.Printf("using qdrant url: %s (collection %q)", qdrantURL, collectionName)
+	log.Printf("using vllm url: %s (embedding model %q, dim %d, required for readiness: %t)", vllmURL, embeddingModel, embeddingDim, vllmReadyRequired)
 
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("server failed: %v", err)
@@ -215,7 +370,7 @@ func (a *App) handleRoot(w http.ResponseWriter, r *http.Request) {
 		"service":     "api-go",
 		"status":      "ok",
 		"description": "AI inference platform API",
-		"endpoints":   "/health, /ready, /collections, /collections/init, /documents, /metrics",
+		"endpoints":   "/health, /ready, /collections, /collections/init, /documents, /search, /metrics",
 	})
 }
 
@@ -227,34 +382,64 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
-	resp, body, err := a.doQdrantRequest(http.MethodGet, "/", nil)
-	if err != nil {
+	notReady := func(errMsg string, qdrantBody, vllmBody json.RawMessage) {
 		apiReadinessFailuresTotal.Inc()
 		writeJSON(w, http.StatusServiceUnavailable, ReadyResponse{
-			Status:    "not ready",
-			Service:   "api-go",
-			QdrantURL: a.qdrantURL,
-			Error:     err.Error(),
+			Status:     "not ready",
+			Service:    "api-go",
+			QdrantURL:  a.qdrantURL,
+			Qdrant:     qdrantBody,
+			VLLMURL:    a.vllmURL,
+			VLLMModels: vllmBody,
+			Collection: a.collectionName,
+			Error:      errMsg,
 		})
+	}
+
+	resp, qdrantBody, err := a.doQdrantRequest(http.MethodGet, "/", nil)
+	if err != nil {
+		notReady("qdrant: "+err.Error(), nil, nil)
+		return
+	}
+	if resp.StatusCode >= 400 {
+		notReady(fmt.Sprintf("qdrant returned status %d", resp.StatusCode), nil, nil)
 		return
 	}
 
-	if resp.StatusCode >= 400 {
-		apiReadinessFailuresTotal.Inc()
-		writeJSON(w, http.StatusServiceUnavailable, ReadyResponse{
-			Status:    "not ready",
-			Service:   "api-go",
-			QdrantURL: a.qdrantURL,
-			Error:     fmt.Sprintf("qdrant returned status %d", resp.StatusCode),
-		})
+	// Dependency health, behind the VLLM_READY_REQUIRED toggle: with the
+	// toggle off (default) readiness is the pre-#0 baseline (Qdrant only),
+	// so an intentionally stopped GPU host doesn't pull pods out of Service;
+	// with it on, vLLM must answer /models — ingest and search would fail on
+	// the first embedding call anyway.
+	var vllmBody json.RawMessage
+	if a.vllmReadyRequired {
+		vllmResp, body, err := a.doVLLMRequest(http.MethodGet, "/models", nil)
+		if err != nil {
+			notReady("vllm: "+err.Error(), qdrantBody, nil)
+			return
+		}
+		if vllmResp.StatusCode >= 400 {
+			notReady(fmt.Sprintf("vllm returned status %d", vllmResp.StatusCode), qdrantBody, nil)
+			return
+		}
+		vllmBody = body
+	}
+
+	// Hard rule: refuse to look ready when the configured embedding
+	// model/dimension contradicts what the collection was created with.
+	if _, err := a.checkCollectionCompat(a.collectionName); err != nil {
+		notReady("collection: "+err.Error(), qdrantBody, vllmBody)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, ReadyResponse{
-		Status:    "ready",
-		Service:   "api-go",
-		QdrantURL: a.qdrantURL,
-		Qdrant:    body,
+		Status:     "ready",
+		Service:    "api-go",
+		QdrantURL:  a.qdrantURL,
+		Qdrant:     qdrantBody,
+		VLLMURL:    a.vllmURL,
+		VLLMModels: vllmBody,
+		Collection: a.collectionName,
 	})
 }
 
@@ -304,7 +489,19 @@ func (a *App) handleCollectionsInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.VectorSize == 0 {
-		req.VectorSize = 768
+		req.VectorSize = a.embeddingDim
+	}
+
+	// Hard rule, enforced not just documented: a collection whose size differs
+	// from EMBEDDING_DIM would silently break retrieval on the first query.
+	if req.VectorSize != a.embeddingDim {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: fmt.Sprintf(
+				"vector_size %d does not match EMBEDDING_DIM %d — collections must be created with the embedding model's dimension",
+				req.VectorSize, a.embeddingDim,
+			),
+		})
+		return
 	}
 
 	distance, err := normalizeDistance(req.Distance)
@@ -442,29 +639,13 @@ func (a *App) handleDocuments(w http.ResponseWriter, r *http.Request) {
 
 	mode := "dry_run"
 	if !req.DryRun {
-		mode = "planned_ingest"
+		mode = "ingest"
 	}
 	documentIngestRequestsTotal.WithLabelValues(mode).Inc()
-	documentChunksProducedTotal.WithLabelValues(req.DocumentID).Add(float64(len(chunks)))
+	documentChunksProducedTotal.Add(float64(len(chunks)))
 
 	if !req.DryRun {
-		writeJSON(w, http.StatusNotImplemented, map[string]interface{}{
-			"status":  "not_implemented",
-			"message": "real embeddings + qdrant upsert will be enabled after embeddings backend is connected",
-			"preview": DocumentIngestResponse{
-				Status:       "preview_ready",
-				DocumentID:   req.DocumentID,
-				Title:        req.Title,
-				Source:       req.Source,
-				ChunkSize:    req.ChunkSize,
-				ChunkOverlap: req.ChunkOverlap,
-				ChunkCount:   len(chunks),
-				ChunkingMode: "markdown_aware",
-				ChunkingVer:  chunkingVersion,
-				DryRun:       true,
-				Chunks:       chunks,
-			},
-		})
+		a.ingestChunks(w, req, chunkTexts, chunks)
 		return
 	}
 
@@ -480,6 +661,198 @@ func (a *App) handleDocuments(w http.ResponseWriter, r *http.Request) {
 		ChunkingVer:  chunkingVersion,
 		DryRun:       true,
 		Chunks:       chunks,
+	})
+}
+
+// ingestChunks is the real (non-dry-run) ingestion path: embed every chunk
+// via the vLLM backend, then upsert one point per chunk into Qdrant.
+func (a *App) ingestChunks(w http.ResponseWriter, req DocumentIngestRequest, chunkTexts []string, chunks []DocumentChunk) {
+	exists, err := a.checkCollectionCompat(a.collectionName)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, ErrorResponse{Error: err.Error()})
+		return
+	}
+	if !exists {
+		writeJSON(w, http.StatusConflict, ErrorResponse{
+			Error: fmt.Sprintf("collection %q does not exist — create it first via POST /collections/init", a.collectionName),
+		})
+		return
+	}
+
+	vectors, err := a.embedTexts(chunkTexts)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: "embedding backend: " + err.Error()})
+		return
+	}
+
+	points := make([]QdrantPoint, len(chunks))
+	for i, chunk := range chunks {
+		payload := map[string]interface{}{
+			"text":            chunk.Text,
+			"chunk_id":        chunk.ChunkID,
+			"embedding_model": a.embeddingModel,
+			"embedding_dim":   a.embeddingDim,
+		}
+		for k, v := range chunk.Metadata {
+			payload[k] = v
+		}
+
+		points[i] = QdrantPoint{
+			ID:      pointIDFromChunkID(chunk.ChunkID),
+			Vector:  vectors[i],
+			Payload: payload,
+		}
+	}
+
+	// Re-ingesting a document that now chunks into fewer pieces must not
+	// leave stale points behind: chunk IDs are index-based, so upsert alone
+	// only replaces overlapping indices. Drop everything previously stored
+	// for this document_id first (brief absence window is acceptable here).
+	deleteResp, deleteBody, err := a.doQdrantRequest(
+		http.MethodPost,
+		"/collections/"+url.PathEscape(a.collectionName)+"/points/delete?wait=true",
+		QdrantDeleteRequest{Filter: QdrantFilter{Must: []QdrantFieldCondition{
+			{Key: "document_id", Match: QdrantMatchValue{Value: req.DocumentID}},
+		}}},
+	)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: "qdrant delete: " + err.Error()})
+		return
+	}
+	if deleteResp.StatusCode >= 400 {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{
+			Error: fmt.Sprintf("qdrant delete returned status %d: %s", deleteResp.StatusCode, truncateBody(deleteBody)),
+		})
+		return
+	}
+
+	upsertResp, upsertBody, err := a.doQdrantRequest(
+		http.MethodPut,
+		"/collections/"+url.PathEscape(a.collectionName)+"/points?wait=true",
+		QdrantUpsertRequest{Points: points},
+	)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: "qdrant upsert: " + err.Error()})
+		return
+	}
+	if upsertResp.StatusCode >= 400 {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{
+			Error: fmt.Sprintf("qdrant upsert returned status %d: %s", upsertResp.StatusCode, truncateBody(upsertBody)),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, DocumentIngestResponse{
+		Status:        "ingested",
+		DocumentID:    req.DocumentID,
+		Title:         req.Title,
+		Source:        req.Source,
+		ChunkSize:     req.ChunkSize,
+		ChunkOverlap:  req.ChunkOverlap,
+		ChunkCount:    len(chunks),
+		ChunkingMode:  "markdown_aware",
+		ChunkingVer:   chunkingVersion,
+		DryRun:        false,
+		UpsertedCount: len(points),
+		Chunks:        chunks,
+	})
+}
+
+// handleSearch is the retrieval path: embed the query with the same model the
+// collection was ingested with, then return top-k nearest chunks from Qdrant.
+func (a *App) handleSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{
+			Error: "method not allowed",
+		})
+		return
+	}
+
+	var req SearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "invalid json body",
+		})
+		return
+	}
+
+	req.Query = strings.TrimSpace(req.Query)
+	if req.Query == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "query is required",
+		})
+		return
+	}
+
+	if req.TopK == 0 {
+		req.TopK = 5
+	}
+	if req.TopK < 1 || req.TopK > 50 {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "top_k must be between 1 and 50",
+		})
+		return
+	}
+
+	exists, err := a.checkCollectionCompat(a.collectionName)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, ErrorResponse{Error: err.Error()})
+		return
+	}
+	if !exists {
+		writeJSON(w, http.StatusConflict, ErrorResponse{
+			Error: fmt.Sprintf("collection %q does not exist — create it first via POST /collections/init", a.collectionName),
+		})
+		return
+	}
+
+	vectors, err := a.embedTexts([]string{req.Query})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: "embedding backend: " + err.Error()})
+		return
+	}
+
+	searchResp, searchBody, err := a.doQdrantRequest(
+		http.MethodPost,
+		"/collections/"+url.PathEscape(a.collectionName)+"/points/search",
+		QdrantSearchRequest{Vector: vectors[0], Limit: req.TopK, WithPayload: true},
+	)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: "qdrant search: " + err.Error()})
+		return
+	}
+	if searchResp.StatusCode >= 400 {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{
+			Error: fmt.Sprintf("qdrant search returned status %d: %s", searchResp.StatusCode, truncateBody(searchBody)),
+		})
+		return
+	}
+
+	var parsed QdrantSearchResponse
+	if err := json.Unmarshal(searchBody, &parsed); err != nil {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{
+			Error: "failed to parse qdrant search response",
+		})
+		return
+	}
+
+	results := make([]SearchResult, 0, len(parsed.Result))
+	for _, hit := range parsed.Result {
+		documentID, _ := hit.Payload["document_id"].(string)
+		chunkID, _ := hit.Payload["chunk_id"].(string)
+		results = append(results, SearchResult{
+			Score:      hit.Score,
+			DocumentID: documentID,
+			ChunkID:    chunkID,
+			Payload:    hit.Payload,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, SearchResponse{
+		Query:      req.Query,
+		Collection: a.collectionName,
+		TopK:       req.TopK,
+		Results:    results,
 	})
 }
 
@@ -757,6 +1130,186 @@ func (a *App) doQdrantRequest(method, path string, payload interface{}) (*http.R
 	return resp, body, nil
 }
 
+// doVLLMRequest mirrors doQdrantRequest for the vLLM backend, feeding the
+// vllm_* metrics that k8s/monitoring/api-go-dashboard.yaml visualizes.
+func (a *App) doVLLMRequest(method, path string, payload interface{}) (*http.Response, []byte, error) {
+	startedAt := time.Now()
+
+	var bodyReader io.Reader
+
+	if payload != nil {
+		requestBody, err := json.Marshal(payload)
+		if err != nil {
+			vllmRequestErrorsTotal.WithLabelValues(method, path).Inc()
+			return nil, nil, fmt.Errorf("failed to marshal vllm request: %w", err)
+		}
+		bodyReader = bytes.NewReader(requestBody)
+	}
+
+	req, err := http.NewRequest(method, a.vllmURL+path, bodyReader)
+	if err != nil {
+		vllmRequestErrorsTotal.WithLabelValues(method, path).Inc()
+		return nil, nil, fmt.Errorf("failed to create request to vllm: %w", err)
+	}
+
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		vllmRequestErrorsTotal.WithLabelValues(method, path).Inc()
+		return nil, nil, fmt.Errorf("failed to reach vllm: %w", err)
+	}
+
+	body, err := readResponseBody(resp)
+	if err != nil {
+		vllmRequestErrorsTotal.WithLabelValues(method, path).Inc()
+		return resp, nil, fmt.Errorf("failed to read vllm response: %w", err)
+	}
+
+	vllmRequestDuration.WithLabelValues(
+		method,
+		path,
+		strconv.Itoa(resp.StatusCode),
+	).Observe(time.Since(startedAt).Seconds())
+
+	return resp, body, nil
+}
+
+// embedTexts calls the OpenAI-compatible /embeddings endpoint and returns one
+// vector per input text, in input order. Count and dimension are validated so
+// a misconfigured backend fails loudly instead of corrupting the collection.
+func (a *App) embedTexts(texts []string) ([][]float64, error) {
+	if len(texts) == 0 {
+		return [][]float64{}, nil
+	}
+
+	resp, body, err := a.doVLLMRequest(http.MethodPost, "/embeddings", EmbeddingsAPIRequest{
+		Model: a.embeddingModel,
+		Input: texts,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("vllm embeddings returned status %d: %s", resp.StatusCode, truncateBody(body))
+	}
+
+	var parsed EmbeddingsAPIResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("failed to parse vllm embeddings response: %w", err)
+	}
+
+	if len(parsed.Data) != len(texts) {
+		return nil, fmt.Errorf("vllm returned %d embeddings for %d inputs", len(parsed.Data), len(texts))
+	}
+
+	vectors := make([][]float64, len(texts))
+	for _, item := range parsed.Data {
+		if item.Index < 0 || item.Index >= len(texts) {
+			return nil, fmt.Errorf("vllm returned embedding with out-of-range index %d", item.Index)
+		}
+		if len(item.Embedding) != a.embeddingDim {
+			return nil, fmt.Errorf(
+				"embedding dimension mismatch: vllm returned %d, EMBEDDING_DIM is %d — model and collection config must agree",
+				len(item.Embedding), a.embeddingDim,
+			)
+		}
+		vectors[item.Index] = item.Embedding
+	}
+
+	for i, vec := range vectors {
+		if vec == nil {
+			return nil, fmt.Errorf("vllm response is missing an embedding for input %d", i)
+		}
+	}
+
+	return vectors, nil
+}
+
+// checkCollectionCompat enforces the embedding hard rule: the collection's
+// vector size must match EMBEDDING_DIM, and already-ingested points must have
+// been embedded with the same EMBEDDING_MODEL (checked via the payload stamp
+// written on ingest). Returns exists=false when the collection is absent —
+// that's not an error, /collections/init creates it with the right size.
+func (a *App) checkCollectionCompat(collection string) (bool, error) {
+	resp, body, err := a.doQdrantRequest(http.MethodGet, "/collections/"+url.PathEscape(collection), nil)
+	if err != nil {
+		return false, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode >= 400 {
+		return false, fmt.Errorf("qdrant returned status %d for collection %q", resp.StatusCode, collection)
+	}
+
+	var info QdrantCollectionInfoResponse
+	if err := json.Unmarshal(body, &info); err != nil {
+		return true, fmt.Errorf("failed to parse collection info for %q: %w", collection, err)
+	}
+
+	if size := info.Result.Config.Params.Vectors.Size; size != 0 && size != a.embeddingDim {
+		return true, fmt.Errorf(
+			"embedding dimension mismatch: collection %q was created with size %d but EMBEDDING_DIM is %d — refusing to mix incompatible vectors",
+			collection, size, a.embeddingDim,
+		)
+	}
+
+	scrollResp, scrollBody, err := a.doQdrantRequest(
+		http.MethodPost,
+		"/collections/"+url.PathEscape(collection)+"/points/scroll",
+		QdrantScrollRequest{Limit: 1, WithPayload: true},
+	)
+	if err != nil {
+		return true, err
+	}
+	if scrollResp.StatusCode >= 400 {
+		return true, fmt.Errorf("qdrant scroll returned status %d for collection %q", scrollResp.StatusCode, collection)
+	}
+
+	var scroll QdrantScrollResponse
+	if err := json.Unmarshal(scrollBody, &scroll); err != nil {
+		return true, fmt.Errorf("failed to parse scroll response for %q: %w", collection, err)
+	}
+
+	for _, point := range scroll.Result.Points {
+		storedModel, ok := point.Payload["embedding_model"].(string)
+		if ok && storedModel != a.embeddingModel {
+			return true, fmt.Errorf(
+				"embedding model mismatch: collection %q holds vectors from %q but EMBEDDING_MODEL is %q — the same text would embed to incompatible vectors",
+				collection, storedModel, a.embeddingModel,
+			)
+		}
+	}
+
+	return true, nil
+}
+
+// pointIDFromChunkID derives a stable UUID for a chunk from its chunk ID.
+// Qdrant only accepts UUIDs or unsigned ints as point IDs; hashing the chunk
+// ID keeps re-ingestion idempotent (same chunk → same point, upsert replaces
+// it instead of duplicating). The original chunk_id stays in the payload.
+func pointIDFromChunkID(chunkID string) string {
+	sum := sha256.Sum256([]byte(chunkID))
+	b := sum[:16]
+	b[6] = (b[6] & 0x0f) | 0x40 // version bits: UUIDv4 layout
+	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+func truncateBody(body []byte) string {
+	const max = 200
+	s := string(body)
+	if len(s) > max {
+		// The byte cut can land mid-rune; drop the dangling partial sequence
+		// so the surfaced error stays valid UTF-8.
+		return strings.ToValidUTF8(s[:max], "") + "…"
+	}
+	return s
+}
+
 func readResponseBody(resp *http.Response) ([]byte, error) {
 	defer func() {
 		_ = resp.Body.Close()
@@ -807,4 +1360,32 @@ func getEnv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func getEnvInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		log.Printf("invalid %s=%q, using default %d", key, value, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		log.Printf("invalid %s=%q, using default %t", key, value, fallback)
+		return fallback
+	}
+	return parsed
 }

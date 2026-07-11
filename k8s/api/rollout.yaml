@@ -44,6 +44,22 @@ spec:
               value: "8000"
             - name: QDRANT_URL
               value: "http://qdrant:6333"
+            - name: QDRANT_COLLECTION
+              value: "knowledge"
+            # Readiness stays Qdrant-only until a real vLLM endpoint exists;
+            # flip to "true" during #0 Checkpoint 1 so /ready also gates on
+            # the embeddings backend.
+            - name: VLLM_READY_REQUIRED
+              value: "false"
+            # Pin these during #0 Checkpoint 1: VLLM_URL is the Tailscale
+            # address of the Vast.ai host; EMBEDDING_MODEL/EMBEDDING_DIM must
+            # match the model vLLM serves AND the Qdrant collection's size.
+            - name: VLLM_URL
+              value: "http://vast-gpu:8000/v1"
+            - name: EMBEDDING_MODEL
+              value: "mock-embedding-model"
+            - name: EMBEDDING_DIM
+              value: "384"
             - name: EVM_RPC_URL
               value: "http://evm-node.ai-platform.svc.cluster.local:8545"
 

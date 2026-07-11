@@ -60,7 +60,9 @@ type errorDetail struct {
 }
 
 func main() {
-	port := flag.String("port", getEnv("PORT", "8000"), "port to listen on")
+	// Default deliberately differs from api-go's :8000 so both can run
+	// side-by-side with zero config (api-go's VLLM_URL default matches).
+	port := flag.String("port", getEnv("MOCK_VLLM_PORT", "8001"), "port to listen on")
 	dim := flag.Int("dim", getEnvInt("EMBEDDING_DIM", 384), "embedding vector dimension")
 	model := flag.String("model", getEnv("EMBEDDING_MODEL", "mock-embedding-model"), "model name reported by /v1/models and /v1/embeddings")
 	flag.Parse()

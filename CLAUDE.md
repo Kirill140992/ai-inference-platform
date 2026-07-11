@@ -37,7 +37,7 @@ Full specs in `docs/book-issues/`. Execution order: **#0 → #4 → #3 → #1 �
 - **vLLM** (external GPU host = **Vast.ai**, outside k3s): embeddings + optional generation. **Most failure-prone path:** `api-go → Tailscale → Vast.ai vLLM`.
 - **Hard rule:** the same embedding model **and** vector dimension must be used across ingestion and query, or retrieval silently breaks.
 - **Topology:** k3s runs **locally (homelab)**; vLLM runs on a **rented Vast.ai GPU** reached over a private **Tailscale** tunnel. ArgoCD in local k3s still pulls from GitHub.
-- **Current status:** api-go ↔ Qdrant works locally; the **vLLM/embeddings backend is still a stub** (`main.go` ~L453) — wiring it is **#0**.
+- **Current status:** embeddings backend **wired end-to-end** (Checkpoint 2 of `#0`): ingest → embed → Qdrant upsert, `/search` retrieval, `vllm_*` metrics, dim/model guard at init/ingest/search/`/ready`. Verified locally against `cmd/mock-vllm`. Remaining for `#0`: Checkpoint 1 (Vast.ai GPU + Tailscale), a real-model end-to-end pass, ADR-003 finalized with real facts (model, dim, cost, ACLs).
 
 ## Commands
 
